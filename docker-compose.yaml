@@ -2,7 +2,7 @@ services:
   share:
     image: harbor.zlpv.com/0gu0/share:f09da357600d1b714845ec4154d010a64f205e9a
     ports:
-      - "6001:3000"
+      - "7019:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
