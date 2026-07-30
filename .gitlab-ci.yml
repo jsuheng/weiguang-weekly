@@ -4,7 +4,7 @@ stages:
 
 variables:
   # ============================================
-  # 基础配置
+  # 基础 配置
   # ============================================
   LS_CI_REPOS: "code.zlpv.com/ops/gitlab-ci.git"
   INIT_PATH: "gitlab-ci/init.sh"
@@ -12,8 +12,8 @@ variables:
   
   # 应用配置
   APP_PORTS: "7019"
-  HEALTH_PATH: "/health"
-  DEPLOY_PATH: "/data/gitlabci/backend"
+  HEALTH_PATH: "/api/health"
+  DEPLOY_PATH: "/data/gitlabci/weiguang-weekly"
   
   # 后端服务器（逗号分隔）
   TEST_BACKEND_HOSTS: "10.63.14.185"
