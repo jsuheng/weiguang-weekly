@@ -12,7 +12,7 @@ variables:
   
   # 应用配置
   APP_PORTS: "7019"
-  HEALTH_PATH: "/health"
+  HEALTH_PATH: "/api/health"
   DEPLOY_PATH: "/data/gitlabci/weiguang-weekly"
   
   # 后端服务器（逗号分隔）
