@@ -1,0 +1,45 @@
+{
+  "name": "weiguang-weekly-ops",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "pnpm run build && node --test tests/rendered-html.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node scripts/migrate.mjs",
+    "account:bootstrap-leader": "node scripts/bootstrap-leader.mjs",
+    "ops:preflight": "bash scripts/preflight.sh",
+    "ops:backup": "bash scripts/backup.sh",
+    "ops:restore": "bash scripts/restore.sh",
+    "ops:package": "bash scripts/package-handoff.sh"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.3.14",
+    "@node-rs/argon2": "2.0.2",
+    "drizzle-orm": "0.45.2",
+    "next": "16.2.6",
+    "postgres": "3.4.7",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3"
+  },
+  "type": "module"
+}
