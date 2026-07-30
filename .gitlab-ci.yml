@@ -1,0 +1,525 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  # ============================================
+  # 基础配置
+  # ============================================
+  LS_CI_REPOS: "code.zlpv.com/ops/gitlab-ci.git"
+  INIT_PATH: "gitlab-ci/init.sh"
+  LS_BUILD_IMAGE: "gitlab-ci/build_image.sh"
+  
+  # 应用配置
+  APP_PORTS: "7019"
+  HEALTH_PATH: "/health"
+  DEPLOY_PATH: "/data/gitlabci/backend"
+  
+  # 后端服务器（逗号分隔）
+  TEST_BACKEND_HOSTS: "10.63.9.201"
+  PROD_BACKEND_HOSTS: "10.63.14.182"
+  
+  # Caddy 服务器
+  TEST_CADDY_HOST: "10.63.14.185"
+  PROD_CADDY_HOST: "10.63.14.181"
+  
+  # SSH 配置
+  SSH_USER: "root"
+  CADDY_SSH_USER: "root"
+  CADDY_CONFIG_PATH: "/etc/caddy/Caddyfile"
+  DRAIN_TIMEOUT: "30"
+  
+  # ============================================
+  # 🆕 环境流量控制配置
+  # ============================================
+  # 测试环境：单机部署，"true" - 跳过流量摘除（适用于单机部署或不需要零停机的场景）
+  TEST_SKIP_CADDY_DRAIN: "true"
+  # 生产环境：多机部署，"false" - 执行流量摘除（适用于多机部署，实现零停机）
+  PROD_SKIP_CADDY_DRAIN: "true"
+
+# ============================================
+# 🆕 公共变量模板 - 生产环境
+# ============================================
+.prod_variables: &prod_variables
+  BACKEND_HOSTS: $PROD_BACKEND_HOSTS
+  CADDY_HOST: $PROD_CADDY_HOST
+  SKIP_CADDY_DRAIN: $PROD_SKIP_CADDY_DRAIN  # 使用统一的生产环境配置
+
+# ============================================
+# 🆕 公共变量模板 - 测试环境
+# ============================================
+.test_variables: &test_variables
+  BACKEND_HOSTS: $TEST_BACKEND_HOSTS
+  CADDY_HOST: $TEST_CADDY_HOST
+  SKIP_CADDY_DRAIN: $TEST_SKIP_CADDY_DRAIN  # 使用统一的测试环境配置
+
+# SSH 配置
+.ssh_setup: &ssh_setup
+  - mkdir -p ~/.ssh
+  - chmod 700 ~/.ssh
+  - eval $(ssh-agent -s)
+  - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+  - echo "Host *" >> ~/.ssh/config
+  - echo "    StrictHostKeyChecking no" >> ~/.ssh/config
+  - echo "    UserKnownHostsFile=/dev/null" >> ~/.ssh/config
+  - chmod 644 ~/.ssh/config
+
+# ============================================
+# 构建任务
+# ============================================
+build:
+  image: harbor.zlpv.com/operations/docker:20.10.16
+  stage: build
+  needs: []
+  tags:
+    - linux
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+    - if: $CI_COMMIT_BRANCH == "main"
+  before_script:
+    - git clone --branch main "https://$LS_GITLAB_USER:$LS_GITLAB_PASSWORD@$LS_CI_REPOS"
+    - . $LS_BUILD_IMAGE
+  script:
+    - ci_build_image
+  after_script:
+    - |
+      # 生成统一的部署批次标识：时间戳_PipelineID
+      DEPLOY_TIMESTAMP=$(TZ=UTC-8 date +%Y%m%d_%H%M%S)
+      DEPLOY_BATCH="${DEPLOY_TIMESTAMP}_${CI_PIPELINE_ID}"
+      
+      echo "DEPLOY_BATCH=$DEPLOY_BATCH" >> build.env
+      echo "DEPLOY_TIMESTAMP=$DEPLOY_TIMESTAMP" >> build.env
+      echo "IMAGE_TAG=$CI_COMMIT_SHA" >> build.env
+      
+      echo "✅ 生成部署批次: $DEPLOY_BATCH"
+  artifacts:
+    reports:
+      dotenv: build.env
+
+# ============================================
+# 零停机部署（优化版）
+# ============================================
+.zero-downtime-deploy:
+  image: harbor.zlpv.com/operations/centos:0.0.4
+  stage: deploy
+  needs:
+    - build
+  tags:
+    - linux
+  before_script:
+    - git clone --branch main "https://$LS_GITLAB_USER:$LS_GITLAB_PASSWORD@$LS_CI_REPOS"
+    - . $INIT_PATH
+    - *ssh_setup
+    - |
+      echo "📊 流量控制模式: $([ "$SKIP_CADDY_DRAIN" = "true" ] && echo "跳过流量摘除" || echo "执行流量摘除（零停机）")"
+      echo "📍 后端服务器: $BACKEND_HOSTS"
+  script:
+    - |
+      echo "========================================"
+      echo "🚀 零停机部署开始"
+      echo "========================================"
+      
+      export IMAGE=harbor.zlpv.com/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:${IMAGE_TAG:-$CI_COMMIT_SHA}
+      
+      # 使用构建阶段生成的批次标识
+      DEPLOY_BATCH="${DEPLOY_BATCH:-$(TZ=UTC-8 date +%Y%m%d_%H%M%S)_${CI_PIPELINE_ID}}"
+      DEPLOY_TIMESTAMP=$(echo $DEPLOY_BATCH | cut -d'_' -f1)
+      
+      echo "📦 镜像: $IMAGE"
+      echo "🆔 部署批次: $DEPLOY_BATCH"
+      echo "🕐 时间戳: $DEPLOY_TIMESTAMP"
+      echo "📍 后端: $BACKEND_HOSTS"
+      echo "🔌 端口: $APP_PORTS"
+      echo "🔀 流量摘除: $([ "$SKIP_CADDY_DRAIN" = "true" ] && echo "跳过" || echo "执行")"
+      echo ""
+      
+      BACKEND_LIST=$(echo $BACKEND_HOSTS | tr ',' ' ')
+      PORT_LIST=$(echo $APP_PORTS | tr ',' ' ')
+      
+      # 如果不是跳过模式，才检查 Caddy 配置
+      if [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+        echo "🔍 检查 Caddy 配置..."
+        ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+          [ -f ${CADDY_CONFIG_PATH} ] || { echo '❌ 配置文件不存在'; exit 1; }
+        " || exit 1
+        echo "✅ Caddy 配置存在"
+        echo ""
+      fi
+      
+      for BACKEND in $BACKEND_LIST; do
+        echo "========================================"
+        echo "📦 部署: $BACKEND"
+        echo "🆔 批次: $DEPLOY_BATCH"
+        echo "========================================"
+        
+        FIRST_PORT=$(echo $PORT_LIST | awk '{print $1}')
+        
+        # 判断是否需要摘除流量
+        if [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+          IN_CONFIG=$(ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+            grep -q 'to[[:space:]]*${BACKEND}:${FIRST_PORT}' ${CADDY_CONFIG_PATH} && echo 'yes' || echo 'no'
+          ")
+        else
+          IN_CONFIG="no"
+          echo "⏭️  跳过 Caddy 摘除流量检查（SKIP_CADDY_DRAIN=true）"
+        fi
+        
+        if [ "$IN_CONFIG" = "yes" ] && [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+          echo "[1/6] 摘除流量（所有端口）..."
+          ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+            for PORT in $PORT_LIST; do
+              echo '  摘除端口: '\$PORT
+              sudo sed -i 's/^\([[:space:]]*\)to[[:space:]]*${BACKEND}:'\$PORT'/\1# DOWN to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+            done
+            sudo caddy reload --config ${CADDY_CONFIG_PATH}
+          " || { echo "❌ 摘除失败"; exit 1; }
+          
+          echo "[2/6] 等待连接排空 (${DRAIN_TIMEOUT}s)..."
+          sleep ${DRAIN_TIMEOUT}
+        else
+          if [ "$SKIP_CADDY_DRAIN" = "true" ]; then
+            echo "⏭️  跳过摘除流量步骤（SKIP_CADDY_DRAIN=true）"
+          else
+            echo "⚠️  后端不在 Caddy 配置中，跳过摘除"
+          fi
+        fi
+        
+        # ==========================================
+        # 备份当前版本（使用批次标识）
+        # ==========================================
+        echo "[3/6] 备份当前版本..."
+        ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} "
+          set -e
+          cd ${DEPLOY_PATH}
+          
+          mkdir -p backups
+          
+          # 备份当前配置为 previous（用于快速回滚）
+          if [ -f docker-compose.yaml ]; then
+            cp docker-compose.yaml docker-compose.yaml.previous
+            echo \"💾 已创建 previous 备份（用于快速回滚）\"
+          else
+            echo \"⚠️  当前配置文件不存在，将创建新配置\"
+          fi
+          
+          # 清理旧备份，只保留最近7次
+          echo \"🧹 清理旧备份（保留最近7次）...\"
+          cd backups
+          ls -t docker-compose.yaml.20* 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null || true
+          echo \"✅ 保留最近7次备份\"
+        " || {
+          echo "❌ 备份失败"
+          exit 1
+        }
+        
+        echo "[4/6] 部署新版本..."
+        ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} "
+          set -e
+          cd ${DEPLOY_PATH}
+          
+          # 拉取新镜像
+          docker pull $IMAGE
+          
+          # 更新 docker-compose 配置
+          sed -i 's#harbor.zlpv.com/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:.*#$IMAGE#' docker-compose.yaml
+          
+          # 备份修改后的配置（最新版本）
+          if [ -f docker-compose.yaml ]; then
+            cp docker-compose.yaml backups/docker-compose.yaml.${DEPLOY_BATCH}
+            echo \"💾 已创建历史备份: backups/docker-compose.yaml.${DEPLOY_BATCH}\"
+          fi
+          
+          # 优雅重启
+          docker compose stop -t 30
+          docker compose rm -f
+          docker compose up -d
+          
+          echo '✅ 部署完成'
+        " || {
+          echo "❌ 部署失败，从 previous 恢复..."
+          ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} "
+            cd ${DEPLOY_PATH}
+            [ -f docker-compose.yaml.previous ] && cp docker-compose.yaml.previous docker-compose.yaml
+            docker compose up -d
+          " 2>/dev/null
+          
+          # 如果执行了摘除，恢复流量
+          if [ "$SKIP_CADDY_DRAIN" != "true" ] && [ "$IN_CONFIG" = "yes" ]; then
+            ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+              for PORT in $PORT_LIST; do
+                sudo sed -i 's/^\([[:space:]]*\)# DOWN to ${BACKEND}:'\$PORT'/\1to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+              done
+              sudo caddy reload --config ${CADDY_CONFIG_PATH}
+            " 2>/dev/null
+          fi
+          exit 1
+        }
+        
+        echo "[5/6] 健康检查..."
+        HEALTH_OK=false
+        FIRST_PORT=$(echo $PORT_LIST | awk '{print $1}')
+        for i in $(seq 1 30); do
+          if ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} \
+            "curl -s -f http://localhost:${FIRST_PORT}${HEALTH_PATH}" >/dev/null 2>&1; then
+            echo "✅ 健康检查通过 (${i}/30)"
+            HEALTH_OK=true
+            break
+          fi
+          echo "⏳ 等待健康检查... (${i}/30)"
+          sleep 2
+        done
+        
+        if [ "$HEALTH_OK" = "false" ]; then
+          echo "❌ 健康检查失败，从 previous 回滚..."
+          ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} "
+            cd ${DEPLOY_PATH}
+            [ -f docker-compose.yaml.previous ] && cp docker-compose.yaml.previous docker-compose.yaml
+            docker compose up -d
+          "
+          # 如果执行了摘除，恢复流量
+          if [ "$SKIP_CADDY_DRAIN" != "true" ] && [ "$IN_CONFIG" = "yes" ]; then
+            ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+              for PORT in $PORT_LIST; do
+                sudo sed -i 's/^\([[:space:]]*\)# DOWN to ${BACKEND}:'\$PORT'/\1to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+              done
+              sudo caddy reload --config ${CADDY_CONFIG_PATH}
+            " 2>/dev/null
+          fi
+          exit 1
+        fi
+        
+        # 如果执行了摘除，恢复流量
+        if [ "$SKIP_CADDY_DRAIN" != "true" ] && [ "$IN_CONFIG" = "yes" ]; then
+          echo "[6/6] 恢复流量（所有端口）..."
+          ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+            for PORT in $PORT_LIST; do
+              echo '  恢复端口: '\$PORT
+              sudo sed -i 's/^\([[:space:]]*\)# DOWN to ${BACKEND}:'\$PORT'/\1to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+            done
+            sudo caddy reload --config ${CADDY_CONFIG_PATH}
+          " || { echo "❌ 恢复失败"; exit 1; }
+        elif [ "$SKIP_CADDY_DRAIN" = "true" ]; then
+          echo "[6/6] ⏭️  跳过恢复流量步骤（SKIP_CADDY_DRAIN=true）"
+        fi
+        
+        echo "✅ $BACKEND 部署完成"
+        echo ""
+      done
+      
+      echo "========================================"
+      echo "🎉 所有服务器部署完成！"
+      echo "========================================"
+      echo ""
+      echo "📊 部署摘要："
+      echo "  批次: $DEPLOY_BATCH"
+      echo "  镜像: $IMAGE"
+      echo "  模式: $([ "$SKIP_CADDY_DRAIN" = "true" ] && echo "跳过流量摘除" || echo "完整零停机（流量摘除+恢复）")"
+      echo ""
+      echo "💡 回滚提示（只支持 prod 环境）："
+      echo "   - 快速回滚到上一个版本：执行 rollback 任务"
+      echo "   - 使用 previous 备份，立即恢复"
+      echo "   - 历史备份保留最近7次"
+
+# ============================================
+# 零停机回滚（使用 previous）
+# ============================================
+.zero-downtime-rollback:
+  image: harbor.zlpv.com/operations/centos:0.0.4
+  stage: deploy
+  needs: []
+  tags:
+    - linux
+  before_script:
+    - git clone --branch main "https://$LS_GITLAB_USER:$LS_GITLAB_PASSWORD@$LS_CI_REPOS"
+    - . $INIT_PATH
+    - *ssh_setup
+    - |
+      echo "📊 流量控制模式: $([ "$SKIP_CADDY_DRAIN" = "true" ] && echo "跳过流量摘除" || echo "执行流量摘除（零停机）")"
+      echo "📍 后端服务器: $BACKEND_HOSTS"
+  script:
+    - |
+      echo "========================================"
+      echo "🔄 零停机回滚开始（使用 previous）"
+      echo "========================================"
+      
+      BACKEND_LIST=$(echo $BACKEND_HOSTS | tr ',' ' ')
+      PORT_LIST=$(echo $APP_PORTS | tr ',' ' ')
+      
+      FIRST_HOST=$(echo $BACKEND_LIST | awk '{print $1}')
+      
+      # 检查 previous 备份
+      echo "🔍 检查 previous 备份..."
+      HAS_PREVIOUS=$(ssh -o StrictHostKeyChecking=no ${SSH_USER}@${FIRST_HOST} "
+        cd ${DEPLOY_PATH} 2>/dev/null && [ -f docker-compose.yaml.previous ] && echo 'yes' || echo 'no'
+      ")
+      
+      if [ "$HAS_PREVIOUS" = "no" ]; then
+        echo "❌ 未找到 previous 备份，无法回滚"
+        echo ""
+        echo "📋 可用的历史备份："
+        ssh -o StrictHostKeyChecking=no ${SSH_USER}@${FIRST_HOST} "
+          cd ${DEPLOY_PATH}/backups 2>/dev/null
+          echo '  最近7次备份：'
+          ls -t docker-compose.yaml.20* 2>/dev/null | head -7 | while read f; do
+            BATCH=\$(echo \$f | sed 's/.*docker-compose.yaml.//')
+            echo \"    - \$BATCH\"
+          done || echo '    无备份文件'
+        "
+        exit 1
+      fi
+      
+      # 获取 previous 版本信息
+      echo "📊 回滚信息："
+      ssh -o StrictHostKeyChecking=no ${SSH_USER}@${FIRST_HOST} "
+        cd ${DEPLOY_PATH}
+        echo \"  当前版本: \$(grep 'image:' docker-compose.yaml | sed 's/.*image: //' 2>/dev/null || echo '未知')\"
+        echo \"  回滚版本: \$(grep 'image:' docker-compose.yaml.previous | sed 's/.*image: //' 2>/dev/null || echo '未知')\"
+      " || echo ""
+      echo ""
+      
+      echo "⚠️  将回滚到 previous 版本"
+      echo ""
+      
+      for BACKEND in $BACKEND_LIST; do
+        echo "========================================"
+        echo "🔄 回滚: $BACKEND"
+        echo "========================================"
+        
+        # 根据 SKIP_CADDY_DRAIN 决定是否摘除流量
+        if [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+          echo "[1/4] 摘除流量（所有端口）..."
+          ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+            for PORT in $PORT_LIST; do
+              sudo sed -i 's/^\([[:space:]]*\)to[[:space:]]*${BACKEND}:'\$PORT'/\1# DOWN to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+            done
+            sudo caddy reload --config ${CADDY_CONFIG_PATH}
+          " || { echo "❌ 摘除失败"; exit 1; }
+          
+          echo "[2/4] 等待连接排空 (${DRAIN_TIMEOUT}s)..."
+          sleep ${DRAIN_TIMEOUT}
+        else
+          echo "⏭️  跳过摘除流量步骤（SKIP_CADDY_DRAIN=true）"
+        fi
+        
+        echo "[3/4] 从 previous 恢复配置..."
+        ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} "
+          cd ${DEPLOY_PATH}
+          
+          if [ ! -f docker-compose.yaml.previous ]; then
+            echo '❌ previous 备份不存在'
+            exit 1
+          fi
+          
+          # 恢复 previous 版本
+          cp docker-compose.yaml.previous docker-compose.yaml
+          echo \"💾 已恢复 previous 版本\"
+          
+          # 检查镜像是否存在
+          ROLLBACK_IMAGE=\$(grep 'image:' docker-compose.yaml | sed 's/.*image: //' | head -1)
+          if ! docker images --format '{{.Repository}}:{{.Tag}}' | grep -q \"^\${ROLLBACK_IMAGE}$\"; then
+            echo \"📦 镜像不存在，尝试拉取: \${ROLLBACK_IMAGE}\"
+            docker pull \${ROLLBACK_IMAGE} || {
+              echo \"❌ 无法拉取镜像\"
+              exit 1
+            }
+          fi
+          
+          docker compose up -d
+          echo '✅ 容器已启动'
+        " || {
+          echo "❌ 恢复配置失败"
+          # 如果执行了摘除，恢复流量
+          if [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+            ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+              for PORT in $PORT_LIST; do
+                sudo sed -i 's/^\([[:space:]]*\)# DOWN to ${BACKEND}:'\$PORT'/\1to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+              done
+              sudo caddy reload --config ${CADDY_CONFIG_PATH}
+            " 2>/dev/null
+          fi
+          exit 1
+        }
+        
+        echo "[4/4] 健康检查..."
+        FIRST_PORT=$(echo $PORT_LIST | awk '{print $1}')
+        HEALTH_OK=false
+        for i in $(seq 1 30); do
+          if ssh -o StrictHostKeyChecking=no ${SSH_USER}@${BACKEND} \
+            "curl -s -f http://localhost:${FIRST_PORT}${HEALTH_PATH}" >/dev/null 2>&1; then
+            echo "✅ 健康检查通过 (${i}/30)"
+            HEALTH_OK=true
+            break
+          fi
+          echo "⏳ 等待健康检查... (${i}/30)"
+          sleep 2
+        done
+        
+        if [ "$HEALTH_OK" = "false" ]; then
+          echo "❌ 健康检查失败，请手动检查服务器 $BACKEND"
+          # 如果执行了摘除，恢复流量
+          if [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+            ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+              for PORT in $PORT_LIST; do
+                sudo sed -i 's/^\([[:space:]]*\)# DOWN to ${BACKEND}:'\$PORT'/\1to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+              done
+              sudo caddy reload --config ${CADDY_CONFIG_PATH}
+            " 2>/dev/null
+          fi
+          exit 1
+        fi
+        
+        # 如果执行了摘除，恢复流量
+        if [ "$SKIP_CADDY_DRAIN" != "true" ]; then
+          echo "恢复流量（所有端口）..."
+          ssh -o StrictHostKeyChecking=no ${CADDY_SSH_USER}@${CADDY_HOST} "
+            for PORT in $PORT_LIST; do
+              sudo sed -i 's/^\([[:space:]]*\)# DOWN to ${BACKEND}:'\$PORT'/\1to ${BACKEND}:'\$PORT'/' ${CADDY_CONFIG_PATH}
+            done
+            sudo caddy reload --config ${CADDY_CONFIG_PATH}
+          " || { echo "❌ 恢复流量失败"; exit 1; }
+        else
+          echo "⏭️  跳过恢复流量步骤（SKIP_CADDY_DRAIN=true）"
+        fi
+        
+        echo "✅ $BACKEND 回滚完成"
+        echo ""
+      done
+      
+      echo "========================================"
+      echo "🎉 回滚完成！"
+      echo "✅ 已恢复到 previous 版本"
+      echo "========================================"
+      echo ""
+      echo "💡 提示："
+      echo "   - 如需再次回滚，请重新触发回滚任务"
+      echo "   - 回滚后会保留当前的 previous 文件"
+      echo "   - 历史备份保留最近7次"
+
+# ============================================
+# 部署任务
+# ============================================
+deploy_test:
+  extends: .zero-downtime-deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test"
+  variables:
+    <<: *test_variables  # 使用测试环境公共变量
+
+deploy_prod:
+  extends: .zero-downtime-deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  variables:
+    <<: *prod_variables  # 使用生产环境公共变量
+
+# ============================================
+# 回滚任务
+# ============================================
+rollback_prod:
+  extends: .zero-downtime-rollback
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  variables:
+    <<: *prod_variables  # 🆕 与 deploy_prod 使用相同的变量定义

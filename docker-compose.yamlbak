@@ -1,0 +1,64 @@
+name: weiguang-weekly
+
+services:
+  app:
+    image: ${APP_IMAGE:-weiguang-weekly:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weiguang-app
+    env_file:
+      - .env
+    ports:
+      - "7019:3000"
+    volumes:
+      - ${FILE_STORAGE_HOST_PATH:-/data/weiguang/files}:/data/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    container_name: weiguang-postgres
+    env_file:
+      - .env
+    volumes:
+      - /data/weiguang/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - backend
+
+  reminder:
+    image: ${REMINDER_IMAGE:-alpine:3.21}
+    container_name: weiguang-reminder
+    env_file:
+      - .env
+    command:
+      - /bin/sh
+      - -c
+      - >
+        while true; do
+          wget -qO- --header="Authorization: Bearer $$CRON_SECRET"
+          --post-data="" http://app:3000/api/internal/reminders/run || true;
+          sleep 600;
+        done
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+
+networks:
+  frontend:
+  backend:
+    internal: true
