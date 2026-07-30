@@ -16,7 +16,7 @@ variables:
   DEPLOY_PATH: "/data/gitlabci/backend"
   
   # 后端服务器（逗号分隔）
-  TEST_BACKEND_HOSTS: "10.63.9.201"
+  TEST_BACKEND_HOSTS: "10.63.14.185"
   PROD_BACKEND_HOSTS: "10.63.14.182"
   
   # Caddy 服务器
