@@ -4,7 +4,7 @@ stages:
 
 variables:
   # ============================================
-  # 基础配置
+  # 基础 配置
   # ============================================
   LS_CI_REPOS: "code.zlpv.com/ops/gitlab-ci.git"
   INIT_PATH: "gitlab-ci/init.sh"
