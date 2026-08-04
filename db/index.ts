@@ -83,6 +83,12 @@ export async function putStoredFile(
   await writeFile(`${target}.metadata.json`, JSON.stringify({ contentType: options.contentType, ...options.metadata }, null, 2));
 }
 
+export async function deleteStoredFile(key: string) {
+  const target = resolveStoredFile(key);
+  await unlink(target).catch(() => {});
+  await unlink(`${target}.metadata.json`).catch(() => {});
+}
+
 export async function checkFileStorage() {
   const root = getFileStorageDirectory();
   await mkdir(root, { recursive: true });

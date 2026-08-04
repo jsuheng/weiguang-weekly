@@ -370,6 +370,21 @@ export default function WorkspaceApp() {
     }
   };
 
+  const deleteImport = async (batchId: string) => {
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "删除失败");
+      if (data.state) setState(data.state);
+      notify("导入数据已删除");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "删除失败，请稍后重试");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const reviewImport = async (batchId: string, action: "approve" | "reject") => {
     setSaving(true);
     try {
@@ -467,7 +482,7 @@ export default function WorkspaceApp() {
 
         <div className="content">
           {view === "overview" && <Overview state={state} userName={auth.user.displayName} deadline={deadline} onView={setView} onTask={() => setTaskModal(true)} onImport={() => setImportModal(true)} />}
-          {view === "analytics" && <Analytics state={state} onImport={() => setImportModal(true)} onMutate={mutate} onReviewImport={reviewImport} />}
+          {view === "analytics" && <Analytics state={state} onImport={() => setImportModal(true)} onMutate={mutate} onReviewImport={reviewImport} onDeleteImport={deleteImport} />}
           {view === "reports" && <Reports state={state} onOpen={setReportModal} onMutate={mutate} />}
           {view === "tasks" && <Tasks state={state} onCreate={() => setTaskModal(true)} onMutate={mutate} />}
           {view === "notifications" && <Notifications state={state} onMutate={mutate} />}
@@ -552,7 +567,7 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
           {view === "overview" && <InternOverview state={state} member={member} tasks={myTasks} report={myReport} deadline={deadline} onView={setView} onImport={() => setImportModal(true)} />}
           {view === "tasks" && <InternTasks state={state} member={member} tasks={myTasks} onMutate={onMutate} />}
           {view === "reports" && myReport && <InternReport state={state} report={myReport} onMutate={onMutate} />}
-          {view === "analytics" && <InternAnalytics state={state} imports={myImports} member={member} onImport={() => setImportModal(true)} />}
+          {view === "analytics" && <InternAnalytics state={state} imports={myImports} member={member} onImport={() => setImportModal(true)} onDeleteImport={async (batchId) => { const resp = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" }); if (resp.ok) window.location.reload(); else { const data = await resp.json(); alert(data.error || "删除失败"); } }} />}
           {view === "notifications" && <InternNotifications />}
         </div>
       </main>
@@ -649,7 +664,7 @@ function InternReport({ state, report, onMutate }: { state: WorkspaceState; repo
   </>;
 }
 
-function InternAnalytics({ state, imports, member, onImport }: { state: WorkspaceState; imports: ImportBatch[]; member: Member; onImport: () => void }) {
+function InternAnalytics({ state, imports, member, onImport, onDeleteImport }: { state: WorkspaceState; imports: ImportBatch[]; member: Member; onImport: () => void; onDeleteImport: (batchId: string) => Promise<void> }) {
   // 从实习生导入记录中识别其负责的账号
   const myAccountNames = new Set(imports.flatMap(batch =>
     state.contentRows.filter(row => row.batchId === batch.id).map(row => row.account)
@@ -694,7 +709,7 @@ function InternAnalytics({ state, imports, member, onImport }: { state: Workspac
       </article>
       <article className="panel">
         <div className="panel-head"><div><h3>我的导入记录</h3><span>{imports.length} 批</span></div></div>
-        <div className="intern-import-list">{imports.length ? imports.map((batch) => <div key={batch.id}><span className="file-tile">表</span><div><b>{batch.filename}</b><small>{batch.period} · {batch.rows} 条</small></div><StatusPill tone={batch.status === "已批准" ? "teal" : batch.status === "待审核" ? "amber" : "red"}>{batch.status}</StatusPill></div>) : <p className="empty-state">尚无导入记录</p>}</div>
+        <div className="intern-import-list">{imports.length ? imports.map((batch) => <div key={batch.id}><span className="file-tile">表</span><div><b>{batch.filename}</b><small>{batch.period} · {batch.rows} 条</small></div><StatusPill tone={batch.status === "已批准" ? "teal" : batch.status === "待审核" ? "amber" : "red"}>{batch.status}</StatusPill><button className="secondary" style={{ fontSize: 11, padding: "2px 8px", color: "#c44", marginLeft: 8 }} onClick={async () => { if (!window.confirm(`确定删除「${batch.filename}」吗？${batch.status === "已批准" ? "已批准的数据将从看板移除，" : ""}此操作不可撤销。`)) return; await onDeleteImport(batch.id); }} title="删除此导入记录">🗑</button></div>) : <p className="empty-state">尚无导入记录</p>}</div>
       </article>
     </section>
   </>;
@@ -801,11 +816,12 @@ function Overview({ state, userName, deadline, onView, onTask, onImport }: { sta
   );
 }
 
-function Analytics({ state, onImport, onMutate, onReviewImport }: {
+function Analytics({ state, onImport, onMutate, onReviewImport, onDeleteImport }: {
   state: WorkspaceState;
   onImport: () => void;
   onMutate: (next: WorkspaceState, action: string) => void;
   onReviewImport: (batchId: string, action: "approve" | "reject") => Promise<void>;
+  onDeleteImport: (batchId: string) => Promise<void>;
 }) {
   const [basis, setBasis] = useState("内容累计表现");
   const [platform, setPlatform] = useState("全部平台");
@@ -886,7 +902,7 @@ function Analytics({ state, onImport, onMutate, onReviewImport }: {
         </section>
       </>}
       {tab === "内容明细" && <ContentTable platform={platform} rows={basisRows} />}
-      {tab === "导入审核" && <ImportReview state={state} onReview={onReviewImport} />}
+      {tab === "导入审核" && <ImportReview state={state} onReview={onReviewImport} onDelete={onDeleteImport} />}
       {platformManager && <PlatformManagerModal state={state} onClose={() => setPlatformManager(false)} onMutate={onMutate} />}
     </>
   );
@@ -897,8 +913,9 @@ function ContentTable({ platform, rows: allRows }: { platform: string; rows: Arr
   return <article className="panel table-panel"><div className="panel-head"><div><h3>内容明细</h3><span>{rows.length} 条内容 · “—”代表平台未提供</span></div><button>导出当前视图</button></div><div className="table-scroll"><table><thead><tr><th>平台 / 账号</th><th>发布内容</th><th>曝光 / 播放</th><th>2秒退出率</th><th>5秒完播率</th><th>互动率</th><th>互动结构</th><th>全篇完播</th><th>归因涨粉</th></tr></thead><tbody>{rows.map((row) => <tr key={"id" in row ? row.id : row.title}><td><b>{row.platform}</b><small>{row.account}</small></td><td><strong>{row.title}</strong><small>{"metricType" in row ? `${row.metricType}口径` : "图文 / 视频内容"}</small></td><td>{formatNumber(row.exposure)}</td><td>{row.exit == null ? <EmptyMetric /> : `${row.exit}%`}</td><td>{row.five == null ? <EmptyMetric /> : `${row.five}%`}</td><td><StatusPill tone={row.engage > 12 ? "teal" : "neutral"}>{row.engage}%</StatusPill></td><td><span className="interactions">赞 {row.likes} · 评 {row.comments}<br />藏 {row.saves} · 转 {row.shares}</span></td><td>{row.complete == null ? <EmptyMetric /> : `${row.complete}%`}</td><td>+{row.followers}</td></tr>)}</tbody></table></div></article>;
 }
 
-function ImportReview({ state, onReview }: { state: WorkspaceState; onReview: (batchId: string, action: "approve" | "reject") => Promise<void> }) {
+function ImportReview({ state, onReview, onDelete }: { state: WorkspaceState; onReview: (batchId: string, action: "approve" | "reject") => Promise<void>; onDelete: (batchId: string) => Promise<void> }) {
   const [busyId, setBusyId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
   const review = async (id: string, action: "approve" | "reject") => {
     setBusyId(id);
     try {
@@ -907,7 +924,7 @@ function ImportReview({ state, onReview }: { state: WorkspaceState; onReview: (b
       setBusyId("");
     }
   };
-  return <div className="review-list">{state.imports.map((batch) => <article className="panel import-card" key={batch.id}><div className="file-tile">表</div><div className="import-main"><div><h3>{batch.filename}</h3><StatusPill tone={batch.status === "待审核" ? "amber" : batch.status === "已批准" ? "teal" : "red"}>{batch.status}</StatusPill></div><p>{batch.uploader} · {batch.createdAt} · {batch.period}</p><div className="import-facts"><span><b>{batch.rows}</b> 条记录</span><span><b>{batch.basis}</b> 数据口径</span><span><b>{batch.metricType}</b> 分发类型</span><span><b>{batch.detectedPlatforms?.join("、") || "待识别"}</b> 已匹配平台</span><span className={batch.warnings ? "warn" : ""}><b>{batch.warnings}</b> 条警告</span></div>{Boolean(batch.unmatchedPlatforms?.length) && <p className="unmatched-platforms">未匹配：{batch.unmatchedPlatforms?.join("、")}。请先在平台管理中新增或设置为别名。</p>}</div>{batch.status === "待审核" && <div className="review-actions"><button className="secondary" disabled={busyId === batch.id} onClick={() => void review(batch.id, "reject")}>拒绝</button><button className="primary" disabled={busyId === batch.id} onClick={() => void review(batch.id, "approve")}>{busyId === batch.id ? "正在审核…" : "批准导入"}</button></div>}</article>)}</div>;
+  return <div className="review-list">{state.imports.map((batch) => <article className="panel import-card" key={batch.id}><div className="file-tile">表</div><div className="import-main"><div><h3>{batch.filename}</h3><StatusPill tone={batch.status === "待审核" ? "amber" : batch.status === "已批准" ? "teal" : "red"}>{batch.status}</StatusPill></div><p>{batch.uploader} · {batch.createdAt} · {batch.period}</p><div className="import-facts"><span><b>{batch.rows}</b> 条记录</span><span><b>{batch.basis}</b> 数据口径</span><span><b>{batch.metricType}</b> 分发类型</span><span><b>{batch.detectedPlatforms?.join("、") || "待识别"}</b> 已匹配平台</span><span className={batch.warnings ? "warn" : ""}><b>{batch.warnings}</b> 条警告</span></div>{Boolean(batch.unmatchedPlatforms?.length) && <p className="unmatched-platforms">未匹配：{batch.unmatchedPlatforms?.join("、")}。请先在平台管理中新增或设置为别名。</p>}</div>{batch.status === "待审核" && <div className="review-actions"><button className="secondary" disabled={busyId === batch.id} onClick={() => void review(batch.id, "reject")}>拒绝</button><button className="primary" disabled={busyId === batch.id} onClick={() => void review(batch.id, "approve")}>{busyId === batch.id ? "正在审核…" : "批准导入"}</button></div>}<div className="review-actions"><button className="secondary" style={{ color: "#c44" }} disabled={deletingId === batch.id} onClick={async () => { if (!window.confirm(`确定删除「${batch.filename}」吗？已批准的数据将从看板移除，此操作不可撤销。`)) return; setDeletingId(batch.id); await onDelete(batch.id); setDeletingId(""); }}>{deletingId === batch.id ? "删除中…" : "🗑 删除"}</button></div></article>)}</div>;
 }
 
 function Reports({ state, onOpen, onMutate }: { state: WorkspaceState; onOpen: (report: Report) => void; onMutate: (next: WorkspaceState, action: string) => void }) {
