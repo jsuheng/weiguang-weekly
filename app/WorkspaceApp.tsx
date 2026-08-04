@@ -1077,7 +1077,7 @@ function PlatformManagerModal({ state, onClose, onMutate }: { state: WorkspaceSt
   </Modal>;
 }
 
-function ImportModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader?: string }) {
+function ImportModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader: string }) {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState(1);
