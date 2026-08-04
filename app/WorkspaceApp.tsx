@@ -52,6 +52,17 @@ function formatWeekRange(date: Date) {
   return `${fmt(monday)}—${fmt(sunday)}`;
 }
 
+function formatToday(date: Date) {
+  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 · ${weekdays[date.getDay()]}`;
+}
+
+function formatGreeting(date: Date, name: string) {
+  const hour = date.getHours();
+  const word = hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
+  return `${word}，${name}`;
+}
+
 function computeWeeklyExposure(rows: { exposure: number }[]) {
   // 简化：将数据均分为最多12周展示
   if (!rows.length) return [];
@@ -431,7 +442,7 @@ export default function WorkspaceApp() {
         </header>
 
         <div className="content">
-          {view === "overview" && <Overview state={state} onView={setView} onTask={() => setTaskModal(true)} onImport={() => setImportModal(true)} />}
+          {view === "overview" && <Overview state={state} userName={auth.user.displayName} onView={setView} onTask={() => setTaskModal(true)} onImport={() => setImportModal(true)} />}
           {view === "analytics" && <Analytics state={state} onImport={() => setImportModal(true)} onMutate={mutate} onReviewImport={reviewImport} />}
           {view === "reports" && <Reports state={state} onOpen={setReportModal} onMutate={mutate} />}
           {view === "tasks" && <Tasks state={state} onCreate={() => setTaskModal(true)} onMutate={mutate} />}
@@ -531,7 +542,7 @@ function InternOverview({ state, member, tasks, report, onView, onImport }: { st
   const completed = tasks.filter((task) => task.status === "已完成").length;
   const openTasks = tasks.filter((task) => task.status !== "已完成");
   return <>
-    <PageTitle eyebrow="2026年7月27日 · 周一" title={`下午好，${member.name}`} description={`你有 ${openTasks.length} 项待办任务，本周周报已完成 ${report?.progress || 0}%。`} actions={<button className="secondary" onClick={onImport}>导入运营数据</button>} />
+    <PageTitle eyebrow={formatToday(new Date())} title={`${formatGreeting(new Date(), member.name)}`} description={`你有 ${openTasks.length} 项待办任务，本周周报已完成 ${report?.progress || 0}%。`} actions={<button className="secondary" onClick={onImport}>导入运营数据</button>} />
     <section className="hero-grid">
       <article className="hero-card intern-hero">
         <div className="hero-copy"><StatusPill tone="teal">本周个人进度</StatusPill><h2>任务推进有序，<br />记得补充本周复盘</h2><p>你负责的灵珠账号本周累计曝光 <b>12.8 万</b>，已有一批数据等待 Leader 审核。</p><button onClick={() => onView("reports")}>继续填写周报 <span>→</span></button></div>
@@ -593,7 +604,7 @@ function InternReport({ state, report, onMutate }: { state: WorkspaceState; repo
   const [next, setNext] = useState(report.next);
   const save = (submit: boolean) => onMutate({ ...state, reports: state.reports.map((item) => item.id === report.id ? { ...item, completed, result, blockers, next, progress: submit ? 100 : 88, status: submit ? "已提交" : "草稿", updatedAt: "刚刚" } : item) }, submit ? "提交本周周报" : "保存周报草稿");
   return <>
-    <PageTitle eyebrow="我的周报 · 7月27日—8月2日" title="本周周报" description="内容会自动保存；提交后 Leader 可点评或退回修改。" actions={<><button className="secondary" onClick={() => save(false)}>保存草稿</button><button className="primary" onClick={() => save(true)}>提交周报</button></>} />
+    <PageTitle eyebrow={`我的周报 · ${formatWeekRange(new Date())}`} title="本周周报" description="内容会自动保存；提交后 Leader 可点评或退回修改。" actions={<><button className="secondary" onClick={() => save(false)}>保存草稿</button><button className="primary" onClick={() => save(true)}>提交周报</button></>} />
     <div className="report-editor-layout">
       <article className="panel report-editor">
         <div className="editor-status"><div><StatusPill tone={report.status === "已提交" ? "teal" : report.status === "待修改" ? "amber" : "neutral"}>{report.status}</StatusPill><span>更新于 {report.updatedAt}</span></div><strong>{report.progress}%</strong></div>
@@ -683,12 +694,12 @@ function PageTitle({ eyebrow, title, description, actions }: { eyebrow: string; 
   return <div className="page-title"><div><p>{eyebrow}</p><h1>{title}</h1><span>{description}</span></div>{actions && <div className="page-actions">{actions}</div>}</div>;
 }
 
-function Overview({ state, onView, onTask, onImport }: { state: WorkspaceState; onView: (view: ViewKey) => void; onTask: () => void; onImport: () => void }) {
+function Overview({ state, userName, onView, onTask, onImport }: { state: WorkspaceState; userName: string; onView: (view: ViewKey) => void; onTask: () => void; onImport: () => void }) {
   const completed = state.tasks.filter((task) => task.status === "已完成").length;
   const activeMembers = state.members.filter((member) => member.status === "active");
   return (
     <>
-      <PageTitle eyebrow="2026年7月27日 · 周一" title="下午好，姜姗" description="本周数据表现稳定，有 1 项任务逾期、2 份周报待处理。" actions={<><button className="secondary" onClick={onImport}>导入运营数据</button><button className="primary" onClick={onTask}>＋ 发布任务</button></>} />
+      <PageTitle eyebrow={formatToday(new Date())} title={formatGreeting(new Date(), userName)} description="本周数据表现稳定，有 1 项任务逾期、2 份周报待处理。" actions={<><button className="secondary" onClick={onImport}>导入运营数据</button><button className="primary" onClick={onTask}>＋ 发布任务</button></>} />
       <section className="hero-grid">
         <article className="hero-card">
           <div className="hero-copy"><StatusPill tone="teal">本周运营简报</StatusPill><h2>内容触达持续上扬，<br />收藏表现值得关注</h2><p>本周小红书与抖音共发布 26 条内容，统一互动率达到 <b>11.8%</b>。</p><button onClick={() => onView("analytics")}>查看完整数据 <span>→</span></button></div>
@@ -797,10 +808,10 @@ function Analytics({ state, onImport, onMutate, onReviewImport }: {
   const maxPlatformTotal = Math.max(1, ...platformStats.map((item) => item.total));
   return (
     <>
-      <PageTitle eyebrow="账号数据 · 7月20日—7月26日" title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<button className="primary" onClick={onImport}>＋ 导入数据</button>} />
+      <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<button className="primary" onClick={onImport}>＋ 导入数据</button>} />
       <div className="filter-bar">
         <div className="segmented">{["看板", "内容明细", "导入审核"].map((item) => <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item as typeof tab)}>{item}{item === "导入审核" && <em>{state.imports.filter((batch) => batch.status === "待审核").length}</em>}</button>)}</div>
-        <div className="filters"><select value={basis} onChange={(event) => setBasis(event.target.value)}><option>周期新增量</option><option>内容累计表现</option></select><select aria-label="平台筛选" value={platform} onChange={(event) => setPlatform(event.target.value)}><option>全部平台</option>{activePlatforms.map((item) => <option key={item.id}>{item.name}</option>)}</select><button className="platform-manage-trigger" onClick={() => setPlatformManager(true)}>＋ 管理平台</button><button>7月20日—7月26日　⌄</button></div>
+        <div className="filters"><select value={basis} onChange={(event) => setBasis(event.target.value)}><option>周期新增量</option><option>内容累计表现</option></select><select aria-label="平台筛选" value={platform} onChange={(event) => setPlatform(event.target.value)}><option>全部平台</option>{activePlatforms.map((item) => <option key={item.id}>{item.name}</option>)}</select><button className="platform-manage-trigger" onClick={() => setPlatformManager(true)}>＋ 管理平台</button><button>{formatWeekRange(new Date())}　⌄</button></div>
       </div>
       {tab === "看板" && <>
         <div className="notice-line"><span>i</span><p>当前口径为 <b>{basis}</b>，平台为 <b>{platform}</b>。平台名称、别名和默认分发指标可由 Leader 管理，导入时自动匹配。</p></div>
@@ -866,7 +877,7 @@ function ImportReview({ state, onReview }: { state: WorkspaceState; onReview: (b
 function Reports({ state, onOpen, onMutate }: { state: WorkspaceState; onOpen: (report: Report) => void; onMutate: (next: WorkspaceState, action: string) => void }) {
   const submitted = state.reports.filter((report) => report.status === "已提交" || report.status === "已点评").length;
   return <>
-    <PageTitle eyebrow="团队周报 · 7月27日—8月2日" title="本周周报" description={`周五 19:00 截止 · ${submitted}/${state.reports.length} 已提交`} actions={<button className="secondary">历史周报</button>} />
+    <PageTitle eyebrow={`团队周报 · ${formatWeekRange(new Date())}`} title="本周周报" description={`周五 19:00 截止 · ${submitted}/${state.reports.length} 已提交`} actions={<button className="secondary">历史周报</button>} />
     <div className="report-summary"><article><span>已提交</span><strong>{submitted}</strong><small>等待 Leader 点评</small></article><article><span>进行中</span><strong>{state.reports.filter((item) => item.status === "草稿").length}</strong><small>周五 19:00 前提交</small></article><article><span>需修改</span><strong>{state.reports.filter((item) => item.status === "待修改").length}</strong><small>已发送修改建议</small></article><article className="report-deadline"><span>距截止</span><strong>4天 01小时</strong><small>下一次提醒：周五 10:00</small></article></div>
     <div className="report-grid">{state.reports.map((report) => {
       const member = state.members.find((item) => item.id === report.memberId)!;
@@ -1066,7 +1077,7 @@ function PlatformManagerModal({ state, onClose, onMutate }: { state: WorkspaceSt
   </Modal>;
 }
 
-function ImportModal({ onClose, onSave, platforms, uploader = "姜姗" }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader?: string }) {
+function ImportModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader?: string }) {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState(1);
