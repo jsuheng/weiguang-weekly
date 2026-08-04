@@ -808,7 +808,7 @@ function Overview({ state, userName, deadline, onView, onTask, onImport }: { sta
         </article>
         <article className="panel week-card">
           <div className="panel-head"><div><h3>本周节奏</h3><span>10:00—19:00</span></div></div>
-          <div className="week-days">{["一", "二", "三", "四", "五", "六", "日"].map((day, index) => <span key={day} className={index === 0 ? "today" : index > 4 ? "weekend" : ""}><small>周{day}</small><b>{27 + index}</b>{index === 4 && <i />}</span>)}</div>
+          <div className="week-days">{(() => { const now = new Date(); const jsDay = now.getDay(); const todayIndex = jsDay === 0 ? 6 : jsDay - 1; const monday = new Date(now); monday.setDate(now.getDate() - (jsDay === 0 ? 6 : jsDay - 1)); return ["一", "二", "三", "四", "五", "六", "日"].map((day, index) => <span key={day} className={index === todayIndex ? "today" : index > 4 ? "weekend" : ""}><small>周{day}</small><b>{monday.getDate() + index}</b>{index === 4 && <i />}</span>); })()}</div>
           <p>周五 19:00 周报截止 <b>·</b> 非紧急提醒仅在工作时间内发送</p>
         </article>
       </section>
