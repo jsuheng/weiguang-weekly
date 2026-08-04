@@ -76,6 +76,29 @@ function computeWeeklyExposure(rows: { exposure: number }[]) {
   return result;
 }
 
+function computeDeadline(now: Date) {
+  const day = now.getDay();
+  let daysUntilFriday = 5 - day; // 0=Sun, 5=Fri
+  if (daysUntilFriday < 0) daysUntilFriday += 7;
+  if (daysUntilFriday === 0 && now.getHours() >= 19) daysUntilFriday = 7;
+  const friday = new Date(now);
+  friday.setDate(now.getDate() + daysUntilFriday);
+  friday.setHours(19, 0, 0, 0);
+  const diff = friday.getTime() - now.getTime();
+  if (diff <= 0) return { days: 0, hours: 0, minutes: 0, passed: true };
+  const totalHours = Math.floor(diff / 3_600_000);
+  return { days: Math.floor(totalHours / 24), hours: totalHours % 24, minutes: Math.floor((diff % 3_600_000) / 60_000), passed: false };
+}
+
+function useDeadlineCountdown() {
+  const [remaining, setRemaining] = useState(computeDeadline(new Date()));
+  useEffect(() => {
+    const timer = setInterval(() => setRemaining(computeDeadline(new Date())), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return remaining;
+}
+
 function StatusPill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: string }) {
   return <span className={`status-pill ${tone}`}>{children}</span>;
 }
@@ -256,6 +279,7 @@ export default function WorkspaceApp() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordModal, setPasswordModal] = useState(false);
   const role = auth?.activeMembership?.role || "leader";
+  const deadline = useDeadlineCountdown();
 
   useEffect(() => {
     let cancelled = false;
@@ -442,7 +466,7 @@ export default function WorkspaceApp() {
         </header>
 
         <div className="content">
-          {view === "overview" && <Overview state={state} userName={auth.user.displayName} onView={setView} onTask={() => setTaskModal(true)} onImport={() => setImportModal(true)} />}
+          {view === "overview" && <Overview state={state} userName={auth.user.displayName} deadline={deadline} onView={setView} onTask={() => setTaskModal(true)} onImport={() => setImportModal(true)} />}
           {view === "analytics" && <Analytics state={state} onImport={() => setImportModal(true)} onMutate={mutate} onReviewImport={reviewImport} />}
           {view === "reports" && <Reports state={state} onOpen={setReportModal} onMutate={mutate} />}
           {view === "tasks" && <Tasks state={state} onCreate={() => setTaskModal(true)} onMutate={mutate} />}
@@ -466,6 +490,7 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
   const [importModal, setImportModal] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordModal, setPasswordModal] = useState(false);
+  const deadline = useDeadlineCountdown();
   const myTasks = state.tasks.filter((task) => task.assignee === member.name);
   const myReport = state.reports.find((report) => report.memberId === member.id);
   const myImports = state.imports.filter((batch) => batch.uploader === member.name);
@@ -524,7 +549,7 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
         </header>
 
         <div className="content">
-          {view === "overview" && <InternOverview state={state} member={member} tasks={myTasks} report={myReport} onView={setView} onImport={() => setImportModal(true)} />}
+          {view === "overview" && <InternOverview state={state} member={member} tasks={myTasks} report={myReport} deadline={deadline} onView={setView} onImport={() => setImportModal(true)} />}
           {view === "tasks" && <InternTasks state={state} member={member} tasks={myTasks} onMutate={onMutate} />}
           {view === "reports" && myReport && <InternReport state={state} report={myReport} onMutate={onMutate} />}
           {view === "analytics" && <InternAnalytics state={state} imports={myImports} member={member} onImport={() => setImportModal(true)} />}
@@ -538,7 +563,7 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
   );
 }
 
-function InternOverview({ state, member, tasks, report, onView, onImport }: { state: WorkspaceState; member: Member; tasks: Task[]; report?: Report; onView: (view: ViewKey) => void; onImport: () => void }) {
+function InternOverview({ state, member, tasks, report, deadline, onView, onImport }: { state: WorkspaceState; member: Member; tasks: Task[]; report?: Report; deadline: ReturnType<typeof computeDeadline>; onView: (view: ViewKey) => void; onImport: () => void }) {
   const completed = tasks.filter((task) => task.status === "已完成").length;
   const openTasks = tasks.filter((task) => task.status !== "已完成");
   return <>
@@ -554,8 +579,8 @@ function InternOverview({ state, member, tasks, report, onView, onImport }: { st
       </article>
       <article className="deadline-card">
         <div className="deadline-top"><span>周报截止</span><StatusPill tone="amber">周五 19:00</StatusPill></div>
-        <div className="deadline-count"><strong>4</strong><span>天</span><strong>01</strong><span>小时</span></div>
-        <div className="progress-track"><i style={{ width: "48%" }} /></div>
+        <div className="deadline-count"><strong>{deadline.passed ? "已" : deadline.days}</strong><span>{deadline.passed ? "截止" : "天"}</span><strong>{String(deadline.hours).padStart(2, "0")}</strong><span>小时</span></div>
+        <div className="progress-track"><i style={{ width: `${report?.progress || 0}%` }} /></div>
         <div className="deadline-foot"><span>下次提醒</span><b>周五 10:00</b></div>
       </article>
     </section>
@@ -616,7 +641,7 @@ function InternReport({ state, report, onMutate }: { state: WorkspaceState; repo
         <label>本周复盘<textarea placeholder="总结本周做得好的地方、可改进点和方法沉淀" rows={4} /></label>
       </article>
       <aside className="report-side">
-        <article className="panel deadline-mini"><span>提交截止</span><strong>周五 19:00</strong><p>距截止还有 4 天 01 小时</p></article>
+        <article className="panel deadline-mini"><span>提交截止</span><strong>周五 19:00</strong><p>距截止还有 {(() => { const d = computeDeadline(new Date()); return d.passed ? "已截止" : `${d.days} 天 ${String(d.hours).padStart(2, "0")} 小时`; })()}</p></article>
         {report.review && <article className="panel leader-feedback"><StatusPill tone="amber">Leader 点评</StatusPill><h3>请按建议补充</h3><p>{report.review}</p></article>}
         <article className="panel linked-tasks"><h3>关联任务</h3>{state.tasks.filter((task) => task.assignee === report.memberName).map((task) => <p key={task.id}><span className={`check ${task.status === "已完成" ? "done" : ""}`}>{task.status === "已完成" ? "✓" : ""}</span><b>{task.title}</b></p>)}</article>
       </aside>
@@ -694,36 +719,47 @@ function PageTitle({ eyebrow, title, description, actions }: { eyebrow: string; 
   return <div className="page-title"><div><p>{eyebrow}</p><h1>{title}</h1><span>{description}</span></div>{actions && <div className="page-actions">{actions}</div>}</div>;
 }
 
-function Overview({ state, userName, onView, onTask, onImport }: { state: WorkspaceState; userName: string; onView: (view: ViewKey) => void; onTask: () => void; onImport: () => void }) {
+function Overview({ state, userName, deadline, onView, onTask, onImport }: { state: WorkspaceState; userName: string; deadline: ReturnType<typeof computeDeadline>; onView: (view: ViewKey) => void; onTask: () => void; onImport: () => void }) {
   const completed = state.tasks.filter((task) => task.status === "已完成").length;
   const activeMembers = state.members.filter((member) => member.status === "active");
+  // 动态计算 KPI
+  const rows = state.contentRows;
+  const totalExposure = rows.reduce((sum, r) => sum + r.exposure, 0);
+  const totalInteractions = rows.reduce((sum, r) => sum + r.likes + r.comments + r.saves + r.shares, 0);
+  const totalFollowers = rows.reduce((sum, r) => sum + r.followers, 0);
+  const avgEngage = totalExposure > 0
+    ? (rows.reduce((sum, r) => sum + r.engage * r.exposure, 0) / totalExposure).toFixed(1)
+    : "—";
+  const submissionRate = state.reports.length > 0
+    ? Math.round(state.reports.filter(r => r.status === "已提交" || r.status === "已点评").length / state.reports.length * 100)
+    : 0;
   return (
     <>
-      <PageTitle eyebrow={formatToday(new Date())} title={formatGreeting(new Date(), userName)} description="本周数据表现稳定，有 1 项任务逾期、2 份周报待处理。" actions={<><button className="secondary" onClick={onImport}>导入运营数据</button><button className="primary" onClick={onTask}>＋ 发布任务</button></>} />
+      <PageTitle eyebrow={formatToday(new Date())} title={formatGreeting(new Date(), userName)} description={`本周数据表现稳定，有 ${state.tasks.filter(t => t.status === "已逾期").length} 项任务逾期、${state.reports.filter(r => r.status === "待修改" || r.status === "已提交").length} 份周报待处理。`} actions={<><button className="secondary" onClick={onImport}>导入运营数据</button><button className="primary" onClick={onTask}>＋ 发布任务</button></>} />
       <section className="hero-grid">
         <article className="hero-card">
-          <div className="hero-copy"><StatusPill tone="teal">本周运营简报</StatusPill><h2>内容触达持续上扬，<br />收藏表现值得关注</h2><p>本周小红书与抖音共发布 26 条内容，统一互动率达到 <b>11.8%</b>。</p><button onClick={() => onView("analytics")}>查看完整数据 <span>→</span></button></div>
+          <div className="hero-copy"><StatusPill tone="teal">本周运营简报</StatusPill><h2>内容触达持续上扬，<br />收藏表现值得关注</h2><p>当前看板共 <b>{rows.length}</b> 条内容，统一互动率达到 <b>{avgEngage}%</b>。</p><button onClick={() => onView("analytics")}>查看完整数据 <span>→</span></button></div>
           <div className="hero-chart">
-            <div className="hero-metric"><span>内容分发量</span><strong>12.8万</strong><em>↗ 18.6%</em></div>
+            <div className="hero-metric"><span>内容分发量</span><strong>{formatNumber(totalExposure)}</strong><em>曝光 + 播放合计</em></div>
             <div className="spark-bars">{trend.map((value, index) => <i key={index} style={{ height: `${value}%` }} />)}</div>
             <div className="chart-labels"><span>7.06</span><span>7.27</span></div>
           </div>
         </article>
         <article className="deadline-card">
           <div className="deadline-top"><span>周报截止</span><StatusPill tone="amber">周五 19:00</StatusPill></div>
-          <div className="deadline-count"><strong>4</strong><span>天</span><strong>01</strong><span>小时</span></div>
-          <div className="progress-track"><i style={{ width: "48%" }} /></div>
-          <div className="deadline-foot"><span><b>1</b> 已提交</span><span><b>2</b> 待完成</span></div>
+          <div className="deadline-count"><strong>{deadline.passed ? "已" : deadline.days}</strong><span>{deadline.passed ? "截止" : "天"}</span><strong>{String(deadline.hours).padStart(2, "0")}</strong><span>小时</span></div>
+          <div className="progress-track"><i style={{ width: `${submissionRate}%` }} /></div>
+          <div className="deadline-foot"><span><b>{state.reports.filter(r => r.status === "已提交" || r.status === "已点评").length}</b> 已提交</span><span><b>{state.reports.filter(r => r.status !== "已提交" && r.status !== "已点评").length}</b> 待完成</span></div>
         </article>
       </section>
 
       <section className="kpi-grid">
         {[
-          ["发布内容", "26", "较上周 +4", "blue"],
-          ["总互动量", "15,284", "↗ 12.4%", "teal"],
-          ["加权互动率", "11.8%", "↗ 1.6%", "orange"],
-          ["净增粉丝", "+326", "目标完成 82%", "purple"],
-        ].map(([label, value, note, tone]) => <article className="kpi-card" key={label}><span className={`kpi-icon ${tone}`}>{label.slice(0, 1)}</span><div><p>{label}</p><strong>{value}</strong><small className={note.includes("↗") ? "positive" : ""}>{note}</small></div></article>)}
+          ["发布内容", String(rows.length), rows.length ? "当前看板" : "暂无数据", "blue"],
+          ["总互动量", formatNumber(totalInteractions), "赞评藏转合计", "teal"],
+          ["加权互动率", `${avgEngage}%`, "按曝光量加权", "orange"],
+          ["净增粉丝", `+${formatNumber(totalFollowers)}`, "内容归因涨粉", "purple"],
+        ].map(([label, value, note, tone]) => <article className="kpi-card" key={String(label)}><span className={`kpi-icon ${tone}`}>{String(label).slice(0, 1)}</span><div><p>{label}</p><strong>{value}</strong><small>{note}</small></div></article>)}
       </section>
 
       <section className="dashboard-grid">
@@ -878,7 +914,7 @@ function Reports({ state, onOpen, onMutate }: { state: WorkspaceState; onOpen: (
   const submitted = state.reports.filter((report) => report.status === "已提交" || report.status === "已点评").length;
   return <>
     <PageTitle eyebrow={`团队周报 · ${formatWeekRange(new Date())}`} title="本周周报" description={`周五 19:00 截止 · ${submitted}/${state.reports.length} 已提交`} actions={<button className="secondary">历史周报</button>} />
-    <div className="report-summary"><article><span>已提交</span><strong>{submitted}</strong><small>等待 Leader 点评</small></article><article><span>进行中</span><strong>{state.reports.filter((item) => item.status === "草稿").length}</strong><small>周五 19:00 前提交</small></article><article><span>需修改</span><strong>{state.reports.filter((item) => item.status === "待修改").length}</strong><small>已发送修改建议</small></article><article className="report-deadline"><span>距截止</span><strong>4天 01小时</strong><small>下一次提醒：周五 10:00</small></article></div>
+    <div className="report-summary"><article><span>已提交</span><strong>{submitted}</strong><small>等待 Leader 点评</small></article><article><span>进行中</span><strong>{state.reports.filter((item) => item.status === "草稿").length}</strong><small>周五 19:00 前提交</small></article><article><span>需修改</span><strong>{state.reports.filter((item) => item.status === "待修改").length}</strong><small>已发送修改建议</small></article><article className="report-deadline"><span>距截止</span><strong>{(() => { const d = computeDeadline(new Date()); return d.passed ? "已截止" : `${d.days}天 ${String(d.hours).padStart(2, "0")}小时`; })()}</strong><small>下一次提醒：周五 10:00</small></article></div>
     <div className="report-grid">{state.reports.map((report) => {
       const member = state.members.find((item) => item.id === report.memberId)!;
       return <article className="report-card" key={report.id}><div className="report-card-head"><Avatar member={member} /><div><h3>{report.memberName}</h3><span>更新于 {report.updatedAt}</span></div><StatusPill tone={report.status === "已提交" ? "teal" : report.status === "待修改" ? "amber" : "neutral"}>{report.status}</StatusPill></div><div className="report-progress"><span><i style={{ width: `${report.progress}%` }} /></span><b>{report.progress}%</b></div><div className="report-preview"><p><b>本周完成</b>{report.completed}</p><p><b>关键结果</b>{report.result}</p></div><div className="report-card-foot"><span>{report.review ? "已有修改建议" : report.status === "已提交" ? "等待点评" : "自动保存已开启"}</span><button className={report.status === "已提交" ? "primary" : "secondary"} onClick={() => onOpen(report)}>{report.status === "已提交" ? "开始点评" : "查看周报"}</button></div></article>;
