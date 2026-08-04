@@ -42,6 +42,29 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN", { notation: value > 9999 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }
 
+function formatWeekRange(date: Date) {
+  const day = date.getDay();
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - (day === 0 ? 6 : day - 1));
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const fmt = (d: Date) => `${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${fmt(monday)}—${fmt(sunday)}`;
+}
+
+function computeWeeklyExposure(rows: { exposure: number }[]) {
+  // 简化：将数据均分为最多12周展示
+  if (!rows.length) return [];
+  const weeks = Math.min(12, rows.length);
+  const perWeek = Math.ceil(rows.length / weeks);
+  const result: number[] = [];
+  for (let i = 0; i < weeks; i++) {
+    const slice = rows.slice(i * perWeek, (i + 1) * perWeek);
+    result.push(slice.reduce((sum, r) => sum + r.exposure, 0));
+  }
+  return result;
+}
+
 function StatusPill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: string }) {
   return <span className={`status-pill ${tone}`}>{children}</span>;
 }
@@ -242,14 +265,28 @@ export default function WorkspaceApp() {
         }
         const sessionData = await sessionResponse.json() as SessionView;
         if (!cancelled) setAuth(sessionData);
+
+        // 首次登录必须先修改临时密码，不要请求工作区（后端会拒绝未改密用户）
+        if (sessionData.user.mustChangePassword) {
+          return;
+        }
+
         if (sessionData.activeMembership) {
           const workspaceResponse = await fetch("/api/workspace");
           const workspaceData = await workspaceResponse.json();
-          if (!workspaceResponse.ok) throw new Error(workspaceData.error || "工作区加载失败");
+          if (!workspaceResponse.ok) {
+            const error = new Error(workspaceData.error || "工作区加载失败") as Error & { status: number };
+            error.status = workspaceResponse.status;
+            throw error;
+          }
           if (!cancelled && workspaceData.state) setState(workspaceData.state);
         }
-      } catch {
-        if (!cancelled) setAuth(null);
+      } catch (error) {
+        // 仅当会话明确失效（401）时才清空登录状态
+        // 403（需改密/无权限）和 5xx（服务错误）保留登录身份
+        if (!cancelled && (error as { status?: number }).status === 401) {
+          setAuth(null);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -479,7 +516,7 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
           {view === "overview" && <InternOverview state={state} member={member} tasks={myTasks} report={myReport} onView={setView} onImport={() => setImportModal(true)} />}
           {view === "tasks" && <InternTasks state={state} member={member} tasks={myTasks} onMutate={onMutate} />}
           {view === "reports" && myReport && <InternReport state={state} report={myReport} onMutate={onMutate} />}
-          {view === "analytics" && <InternAnalytics imports={myImports} onImport={() => setImportModal(true)} />}
+          {view === "analytics" && <InternAnalytics state={state} imports={myImports} member={member} onImport={() => setImportModal(true)} />}
           {view === "notifications" && <InternNotifications />}
         </div>
       </main>
@@ -576,18 +613,48 @@ function InternReport({ state, report, onMutate }: { state: WorkspaceState; repo
   </>;
 }
 
-function InternAnalytics({ imports, onImport }: { imports: ImportBatch[]; onImport: () => void }) {
+function InternAnalytics({ state, imports, member, onImport }: { state: WorkspaceState; imports: ImportBatch[]; member: Member; onImport: () => void }) {
+  // 从实习生导入记录中识别其负责的账号
+  const myAccountNames = new Set(imports.flatMap(batch =>
+    state.contentRows.filter(row => row.batchId === batch.id).map(row => row.account)
+  ));
+  // 如果识别不到账号，展示全部已批准数据
+  const myRows = myAccountNames.size > 0
+    ? state.contentRows.filter(row => myAccountNames.has(row.account))
+    : state.contentRows;
+  const uniqueAccounts = [...new Set(myRows.map(row => row.account))];
+  const totalExposure = myRows.reduce((sum, row) => sum + row.exposure, 0);
+  const totalInteractions = myRows.reduce((sum, row) => sum + row.likes + row.comments + row.saves + row.shares, 0);
+  const totalFollowers = myRows.reduce((sum, row) => sum + row.followers, 0);
+  const weightedEngage = totalExposure > 0
+    ? (myRows.reduce((sum, row) => sum + row.engage * row.exposure, 0) / totalExposure).toFixed(1)
+    : "—";
+  // 按周汇总曝光量用于趋势图
+  const weeklyExposure = computeWeeklyExposure(myRows);
+  const maxWeekly = Math.max(1, ...weeklyExposure);
+
   return <>
-    <PageTitle eyebrow="账号数据 · 7月20日—7月26日" title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<button className="primary" onClick={onImport}>＋ 导入数据</button>} />
+    <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<button className="primary" onClick={onImport}>＋ 导入数据</button>} />
     <div className="notice-line"><span>i</span><p>实习生导入的数据不会直接进入正式看板，必须通过 Leader 审核。</p></div>
     <section className="analytics-kpis">
-      {[["负责账号", "2", "灵珠 / 闻科学姐"], ["本周发布", "6", "小红书内容"], ["累计曝光", "12.8万", "+14.2%"], ["总互动量", "1,526", "+9.8%"], ["加权互动率", "11.6%", "+1.2%"], ["归因涨粉", "+86", "目标 80%"]].map(([label, value, change]) => <article key={label}><p>{label}<span>···</span></p><strong>{value}</strong><small>{change}</small></article>)}
+      {[
+        ["负责账号", String(uniqueAccounts.length), uniqueAccounts.slice(0, 2).join(" / ") || member.name],
+        ["内容条数", String(myRows.length), myRows.length ? "当前筛选" : "暂无数据"],
+        ["累计曝光", formatNumber(totalExposure), totalExposure > 0 ? "曝光 + 播放合计" : "暂无曝光数据"],
+        ["总互动量", formatNumber(totalInteractions), "赞评藏转合计"],
+        ["加权互动率", `${weightedEngage}%`, "按曝光量加权"],
+        ["归因涨粉", `+${formatNumber(totalFollowers)}`, "内容归因涨粉"],
+      ].map(([label, value, change]) => <article key={String(label)}><p>{label}<span>···</span></p><strong>{value}</strong><small>{change}</small></article>)}
     </section>
     <section className="analytics-grid">
       <article className="panel wide-chart">
         <div className="panel-head"><div><h3>负责账号表现</h3><span>近 12 周 · 周期新增量</span></div><div className="legend"><i className="teal-dot" /> 分发量 <i className="orange-dot" /> 互动率</div></div>
-        <div className="line-chart"><div className="grid-lines">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div><div className="chart-columns">{trend.map((value, index) => <div key={index}><i style={{ height: `${value}%` }}><span /></i><em style={{ bottom: `${Math.max(10, value * .55)}%` }} /></div>)}</div></div>
-        <div className="axis"><span>5.11</span><span>5.25</span><span>6.08</span><span>6.22</span><span>7.06</span><span>7.26</span></div>
+        {weeklyExposure.length > 0 ? (
+          <div className="line-chart"><div className="grid-lines">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div><div className="chart-columns">{weeklyExposure.map((value, index) => <div key={index}><i style={{ height: `${Math.max(4, (value / maxWeekly) * 100)}%` }}><span /></i><em style={{ bottom: `${Math.max(10, (value / maxWeekly) * 55)}%` }} /></div>)}</div></div>
+        ) : (
+          <p className="empty-state" style={{ padding: 40, textAlign: "center" }}>暂无内容数据，导入并审批通过后将在此展示趋势</p>
+        )}
+        <div className="axis">{weeklyExposure.length > 0 ? weeklyExposure.map((_, i) => <span key={i}>W{i + 1}</span>) : null}</div>
       </article>
       <article className="panel">
         <div className="panel-head"><div><h3>我的导入记录</h3><span>{imports.length} 批</span></div></div>

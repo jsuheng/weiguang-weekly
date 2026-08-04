@@ -28,7 +28,7 @@ services:
   reminder:
     image: alpine:3.21
     container_name: weiguang-reminder
-    command: sh -c "while true; do wget -qO- --post-data='' http://app:3000/api/internal/reminders/run || true; sleep 600; done"
+    command: ["/bin/sh", "-c", "while true; do wget -qO- --header=\"Authorization: Bearer $$CRON_SECRET\" --post-data=\"\" http://app:3000/api/internal/reminders/run || true; sleep 600; done"]
     env_file:
       - .env
     restart: unless-stopped
