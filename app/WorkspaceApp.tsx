@@ -1139,8 +1139,8 @@ type ManualRow = {
   platform: string;
   account: string;
   title: string;
-  metricType: "曝光量" | "播放量";
   exposure: string;
+  plays: string;
   exitRate: string;
   fiveSecRate: string;
   likes: string;
@@ -1153,7 +1153,7 @@ type ManualRow = {
 
 function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader: string }) {
   const activePlatforms = platforms.filter(p => p.active);
-  const emptyRow = (): ManualRow => ({ platform: activePlatforms[0]?.name || "", account: "", title: "", metricType: "曝光量", exposure: "", exitRate: "", fiveSecRate: "", likes: "", comments: "", saves: "", shares: "", fullRate: "", followers: "" });
+  const emptyRow = (): ManualRow => ({ platform: activePlatforms[0]?.name || "", account: "", title: "", exposure: "", plays: "", exitRate: "", fiveSecRate: "", likes: "", comments: "", saves: "", shares: "", fullRate: "", followers: "" });
   const [rows, setRows] = useState<ManualRow[]>([emptyRow()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -1165,15 +1165,18 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
   const removeRow = (index: number) => setRows(prev => prev.filter((_, i) => i !== index));
 
   const submit = async () => {
-    const validRows = rows.filter(r => r.platform && r.account && r.title && r.exposure);
-    if (!validRows.length) { setError("请至少填写一条完整数据（平台、账号、内容标题和曝光/播放量必填）"); return; }
+    const validRows = rows.filter(r => r.platform && r.account && r.title && (r.exposure || r.plays));
+    if (!validRows.length) { setError("请至少填写一条完整数据（平台、账号、内容标题和曝光量或播放量必填）"); return; }
     setSubmitting(true);
     setError("");
     try {
       const headers = ["平台", "账号名", "发布内容", "曝光数｜播放量", "2秒退出率", "5秒完播率", "互动率", "点赞数", "评论数", "收藏数", "分享数", "全篇完播率", "涨粉数"];
-      const csvLines = [headers.join(","), ...validRows.map(r =>
-        [r.platform, r.account, r.title, r.exposure, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"].join(",")
-      )];
+      const csvRows: string[][] = [];
+      for (const r of validRows) {
+        if (r.exposure) csvRows.push([r.platform, r.account, r.title, r.exposure, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"]);
+        if (r.plays) csvRows.push([r.platform, r.account, `${r.title}（播放）`, r.plays, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"]);
+      }
+      const csvLines = [headers.join(","), ...csvRows.map(r => r.join(","))];
       const file = new File([new Blob(["﻿" + csvLines.join("\n")], { type: "text/csv" })], `手动录入_${new Date().toISOString().slice(0, 10)}.csv`, { type: "text/csv" });
       await onSave({
         id: `manual_${Date.now()}`,
@@ -1207,10 +1210,8 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
             </select></label>
             <label style={{ fontSize: 12 }}>账号名 <input value={row.account} onChange={e => updateRow(index, "account", e.target.value)} placeholder="如：灵珠" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>发布内容 <input value={row.title} onChange={e => updateRow(index, "title", e.target.value)} placeholder="内容标题或描述" style={{ width: "100%", fontSize: 13 }} /></label>
-            <label style={{ fontSize: 12 }}>指标类型 <select value={row.metricType} onChange={e => updateRow(index, "metricType", e.target.value as "曝光量" | "播放量")} style={{ width: "100%", fontSize: 13 }}>
-              <option>曝光量</option><option>播放量</option>
-            </select></label>
-            <label style={{ fontSize: 12 }}>{row.metricType} <input type="number" value={row.exposure} onChange={e => updateRow(index, "exposure", e.target.value)} placeholder="必填" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>曝光量 <input type="number" value={row.exposure} onChange={e => updateRow(index, "exposure", e.target.value)} placeholder="曝光口径" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>播放量 <input type="number" value={row.plays} onChange={e => updateRow(index, "plays", e.target.value)} placeholder="播放口径" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>2秒退出率 (%) <input type="number" step="0.1" value={row.exitRate} onChange={e => updateRow(index, "exitRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>5秒完播率 (%) <input type="number" step="0.1" value={row.fiveSecRate} onChange={e => updateRow(index, "fiveSecRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>全篇完播率 (%) <input type="number" step="0.1" value={row.fullRate} onChange={e => updateRow(index, "fullRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
