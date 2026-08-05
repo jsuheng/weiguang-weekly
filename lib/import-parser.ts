@@ -164,15 +164,15 @@ async function parseXlsx(bytes: Uint8Array): Promise<ParsedWorkbook> {
   if (!sheetName) throw new Error("Excel 文件中未找到可读取的工作表");
   const sheetXml = new TextDecoder().decode(files.get(sheetName)!);
   const records: Array<Array<string | number | null>> = [];
-  for (const rowMatch of sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+  for (const rowMatch of sheetXml.matchAll(/<(?:[^:>]+:)?row\b[^>]*>([\s\S]*?)<\/(?:[^:>]+:)?row>/g)) {
     const record: Array<string | number | null> = [];
-    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    for (const cellMatch of rowMatch[1].matchAll(/<(?:[^:>]+:)?c\b([^>]*)>([\s\S]*?)<\/(?:[^:>]+:)?c>/g)) {
       const attributes = cellMatch[1];
       const body = cellMatch[2];
       const reference = /\br="([A-Z]+)\d+"/.exec(attributes)?.[1] || "A";
       const column = columnIndex(reference);
       const type = /\bt="([^"]+)"/.exec(attributes)?.[1];
-      const raw = /<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? /<t[^>]*>([\s\S]*?)<\/t>/.exec(body)?.[1] ?? "";
+      const raw = /<(?:[^:>]+:)?v>([\s\S]*?)<\/(?:[^:>]+:)?v>/.exec(body)?.[1] ?? /<(?:[^:>]+:)?t[^>]*>([\s\S]*?)<\/(?:[^:>]+:)?t>/.exec(body)?.[1] ?? "";
       let value: string | number | null = decodeXml(raw);
       if (type === "s") value = sharedStrings[Number(raw)] ?? "";
       else if (type !== "inlineStr" && raw !== "" && Number.isFinite(Number(raw))) value = Number(raw);
@@ -233,8 +233,8 @@ async function inflateRaw(bytes: Uint8Array) {
 }
 
 function parseSharedStrings(xml: string) {
-  return [...xml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map((match) => (
-    [...match[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((item) => decodeXml(item[1])).join("")
+  return [...xml.matchAll(/<(?:[^:>]+:)?si>([\s\S]*?)<\/(?:[^:>]+:)?si>/g)].map((match) => (
+    [...match[1].matchAll(/<(?:[^:>]+:)?t[^>]*>([\s\S]*?)<\/(?:[^:>]+:)?t>/g)].map((item) => decodeXml(item[1])).join("")
   ));
 }
 

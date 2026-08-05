@@ -275,6 +275,7 @@ export default function WorkspaceApp() {
   const [toast, setToast] = useState("");
   const [taskModal, setTaskModal] = useState(false);
   const [importModal, setImportModal] = useState(false);
+  const [manualEntryOpen, setManualEntryOpen] = useState(false);
   const [reportModal, setReportModal] = useState<Report | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordModal, setPasswordModal] = useState(false);
@@ -482,7 +483,7 @@ export default function WorkspaceApp() {
 
         <div className="content">
           {view === "overview" && <Overview state={state} userName={auth.user.displayName} deadline={deadline} onView={setView} onTask={() => setTaskModal(true)} onImport={() => setImportModal(true)} />}
-          {view === "analytics" && <Analytics state={state} onImport={() => setImportModal(true)} onMutate={mutate} onReviewImport={reviewImport} onDeleteImport={deleteImport} />}
+          {view === "analytics" && <Analytics state={state} onImport={() => setImportModal(true)} onManualEntry={() => setManualEntryOpen(true)} onMutate={mutate} onReviewImport={reviewImport} onDeleteImport={deleteImport} />}
           {view === "reports" && <Reports state={state} onOpen={setReportModal} onMutate={mutate} />}
           {view === "tasks" && <Tasks state={state} onCreate={() => setTaskModal(true)} onMutate={mutate} />}
           {view === "notifications" && <Notifications state={state} onMutate={mutate} />}
@@ -493,6 +494,7 @@ export default function WorkspaceApp() {
 
       {taskModal && <TaskModal state={state} onClose={() => setTaskModal(false)} onSave={(task) => { mutate({ ...stateRef.current, tasks: [task, ...stateRef.current.tasks] }, "发布新任务"); setTaskModal(false); }} />}
       {importModal && <ImportModal platforms={state.platforms} uploader={auth.user.displayName} onClose={() => setImportModal(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); setState(result.state); const matched = result.batch.detectedPlatforms?.join("、") || "待确认平台"; const unmatched = result.batch.unmatchedPlatforms?.length ? `；${result.batch.unmatchedPlatforms.join("、")}待匹配` : ""; notify(`已识别 ${result.batch.rows} 条数据 · ${matched}${unmatched}`); setImportModal(false); }} />}
+      {manualEntryOpen && <ManualEntryModal platforms={state.platforms} uploader={auth.user.displayName} onClose={() => setManualEntryOpen(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); setState(result.state); notify(`手动录入 ${result.batch.rows} 条数据 · 已提交审核`); setManualEntryOpen(false); }} />}
       {reportModal && <ReportModal report={reportModal} onClose={() => setReportModal(null)} onSave={(updated) => { mutate({ ...stateRef.current, reports: stateRef.current.reports.map((report) => report.id === updated.id ? updated : report) }, updated.status === "已点评" ? "完成周报点评" : "保存周报"); setReportModal(null); }} />}
       {passwordModal && <PasswordChange session={auth} onClose={() => setPasswordModal(false)} />}
       {toast && <div className="toast"><span>✓</span>{toast}</div>}
@@ -503,6 +505,7 @@ export default function WorkspaceApp() {
 function InternWorkspace({ state, session, member, loading, saving, onMutate }: { state: WorkspaceState; session: SessionView; member: Member; loading: boolean; saving: boolean; onMutate: (next: WorkspaceState, action: string) => void }) {
   const [view, setView] = useState<ViewKey>("overview");
   const [importModal, setImportModal] = useState(false);
+  const [manualEntryOpen, setManualEntryOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordModal, setPasswordModal] = useState(false);
   const deadline = useDeadlineCountdown();
@@ -567,12 +570,13 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
           {view === "overview" && <InternOverview state={state} member={member} tasks={myTasks} report={myReport} deadline={deadline} onView={setView} onImport={() => setImportModal(true)} />}
           {view === "tasks" && <InternTasks state={state} member={member} tasks={myTasks} onMutate={onMutate} />}
           {view === "reports" && myReport && <InternReport state={state} report={myReport} onMutate={onMutate} />}
-          {view === "analytics" && <InternAnalytics state={state} imports={myImports} member={member} onImport={() => setImportModal(true)} onDeleteImport={async (batchId) => { const resp = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" }); if (resp.ok) window.location.reload(); else { const data = await resp.json(); alert(data.error || "删除失败"); } }} />}
+          {view === "analytics" && <InternAnalytics state={state} imports={myImports} member={member} onImport={() => setImportModal(true)} onManualEntry={() => setManualEntryOpen(true)} onDeleteImport={async (batchId) => { const resp = await fetch(`/api/imports?batchId=${encodeURIComponent(batchId)}`, { method: "DELETE" }); if (resp.ok) window.location.reload(); else { const data = await resp.json(); alert(data.error || "删除失败"); } }} />}
           {view === "notifications" && <InternNotifications />}
         </div>
       </main>
 
       {importModal && <ImportModal platforms={state.platforms} uploader={member.name} onClose={() => setImportModal(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); window.location.reload(); void result; }} />}
+      {manualEntryOpen && <ManualEntryModal platforms={state.platforms} uploader={member.name} onClose={() => setManualEntryOpen(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); window.location.reload(); void result; }} />}
       {passwordModal && <PasswordChange session={session} onClose={() => setPasswordModal(false)} />}
     </div>
   );
@@ -664,7 +668,7 @@ function InternReport({ state, report, onMutate }: { state: WorkspaceState; repo
   </>;
 }
 
-function InternAnalytics({ state, imports, member, onImport, onDeleteImport }: { state: WorkspaceState; imports: ImportBatch[]; member: Member; onImport: () => void; onDeleteImport: (batchId: string) => Promise<void> }) {
+function InternAnalytics({ state, imports, member, onImport, onManualEntry, onDeleteImport }: { state: WorkspaceState; imports: ImportBatch[]; member: Member; onImport: () => void; onManualEntry: () => void; onDeleteImport: (batchId: string) => Promise<void> }) {
   // 从实习生导入记录中识别其负责的账号
   const myAccountNames = new Set(imports.flatMap(batch =>
     state.contentRows.filter(row => row.batchId === batch.id).map(row => row.account)
@@ -685,7 +689,7 @@ function InternAnalytics({ state, imports, member, onImport, onDeleteImport }: {
   const maxWeekly = Math.max(1, ...weeklyExposure);
 
   return <>
-    <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<button className="primary" onClick={onImport}>＋ 导入数据</button>} />
+    <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
     <div className="notice-line"><span>i</span><p>实习生导入的数据不会直接进入正式看板，必须通过 Leader 审核。</p></div>
     <section className="analytics-kpis">
       {[
@@ -816,9 +820,10 @@ function Overview({ state, userName, deadline, onView, onTask, onImport }: { sta
   );
 }
 
-function Analytics({ state, onImport, onMutate, onReviewImport, onDeleteImport }: {
+function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, onDeleteImport }: {
   state: WorkspaceState;
   onImport: () => void;
+  onManualEntry: () => void;
   onMutate: (next: WorkspaceState, action: string) => void;
   onReviewImport: (batchId: string, action: "approve" | "reject") => Promise<void>;
   onDeleteImport: (batchId: string) => Promise<void>;
@@ -860,7 +865,7 @@ function Analytics({ state, onImport, onMutate, onReviewImport, onDeleteImport }
   const maxPlatformTotal = Math.max(1, ...platformStats.map((item) => item.total));
   return (
     <>
-      <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<button className="primary" onClick={onImport}>＋ 导入数据</button>} />
+      <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
       <div className="filter-bar">
         <div className="segmented">{["看板", "内容明细", "导入审核"].map((item) => <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item as typeof tab)}>{item}{item === "导入审核" && <em>{state.imports.filter((batch) => batch.status === "待审核").length}</em>}</button>)}</div>
         <div className="filters"><select value={basis} onChange={(event) => setBasis(event.target.value)}><option>周期新增量</option><option>内容累计表现</option></select><select aria-label="平台筛选" value={platform} onChange={(event) => setPlatform(event.target.value)}><option>全部平台</option>{activePlatforms.map((item) => <option key={item.id}>{item.name}</option>)}</select><button className="platform-manage-trigger" onClick={() => setPlatformManager(true)}>＋ 管理平台</button><button>{formatWeekRange(new Date())}　⌄</button></div>
@@ -1127,6 +1132,92 @@ function PlatformManagerModal({ state, onClose, onMutate }: { state: WorkspaceSt
     <div className="platform-add-row"><label>新增平台<input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="输入自定义平台名" /></label><label>默认分发指标<select value={newMetricType} onChange={(event) => setNewMetricType(event.target.value as PlatformDefinition["metricType"])}><option>曝光量</option><option>播放量</option></select></label><button className="secondary" onClick={add} disabled={!newName.trim()}>＋ 添加</button></div>
     {error && <p className="auth-message">{error}</p>}
     <div className="form-hint"><span>i</span>导入时会优先按平台名称和别名匹配；平台列为空时，可根据内容链接域名自动识别。</div>
+  </Modal>;
+}
+
+type ManualRow = {
+  platform: string;
+  account: string;
+  title: string;
+  metricType: "曝光量" | "播放量";
+  exposure: string;
+  likes: string;
+  comments: string;
+  saves: string;
+  shares: string;
+  followers: string;
+};
+
+function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader: string }) {
+  const activePlatforms = platforms.filter(p => p.active);
+  const [rows, setRows] = useState<ManualRow[]>([{ platform: activePlatforms[0]?.name || "", account: "", title: "", metricType: "曝光量", exposure: "", likes: "", comments: "", saves: "", shares: "", followers: "" }]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const updateRow = (index: number, field: keyof ManualRow, value: string) => {
+    setRows(prev => prev.map((row, i) => i === index ? { ...row, [field]: value } : row));
+  };
+  const addRow = () => setRows(prev => [...prev, { platform: activePlatforms[0]?.name || "", account: "", title: "", metricType: "曝光量", exposure: "", likes: "", comments: "", saves: "", shares: "", followers: "" }]);
+  const removeRow = (index: number) => setRows(prev => prev.filter((_, i) => i !== index));
+
+  const submit = async () => {
+    const validRows = rows.filter(r => r.platform && r.account && r.title && r.exposure);
+    if (!validRows.length) { setError("请至少填写一条完整数据（平台、账号、内容标题和曝光/播放量必填）"); return; }
+    setSubmitting(true);
+    setError("");
+    try {
+      const headers = ["平台", "账号名", "发布内容", "曝光数｜播放量", "互动率", "点赞数", "评论数", "收藏数", "分享数", "涨粉数"];
+      const csvLines = [headers.join(","), ...validRows.map(r =>
+        [r.platform, r.account, r.title, r.exposure, "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.followers || "0"].join(",")
+      )];
+      const file = new File([new Blob(["﻿" + csvLines.join("\n")], { type: "text/csv" })], `手动录入_${new Date().toISOString().slice(0, 10)}.csv`, { type: "text/csv" });
+      await onSave({
+        id: `manual_${Date.now()}`,
+        filename: `手动录入 · ${uploader} · ${new Date().toLocaleDateString("zh-CN")}`,
+        uploader,
+        period: `${formatWeekRange(new Date())}`,
+        basis: "内容累计表现",
+        metricType: "自动识别",
+        rows: validRows.length,
+        warnings: 0,
+        status: "待审核",
+        createdAt: "刚刚",
+      }, file);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "保存失败");
+      setSubmitting(false);
+    }
+  };
+
+  return <Modal title="手动录入运营数据" subtitle={`${rows.length} 行 · 填写后提交 Leader 审核`} onClose={onClose} footer={<><button className="secondary" onClick={addRow}>＋ 添加一行</button><button className="secondary" onClick={onClose} disabled={submitting}>取消</button><button className="primary" onClick={submit} disabled={submitting}>{submitting ? "正在提交…" : "提交审核"}</button></>}>
+    <div style={{ maxHeight: "50vh", overflow: "auto" }}>
+      {rows.map((row, index) => (
+        <div key={index} style={{ border: "1px solid #e0e0e0", borderRadius: 8, padding: 12, marginBottom: 10, background: index % 2 === 0 ? "#fafafa" : "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <b style={{ fontSize: 13 }}>第 {index + 1} 行</b>
+            {rows.length > 1 && <button className="secondary" style={{ fontSize: 11, padding: "1px 8px", color: "#c44" }} onClick={() => removeRow(index)}>✕ 移除</button>}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px" }}>
+            <label style={{ fontSize: 12 }}>平台 <select value={row.platform} onChange={e => updateRow(index, "platform", e.target.value)} style={{ width: "100%", fontSize: 13 }}>
+              {activePlatforms.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select></label>
+            <label style={{ fontSize: 12 }}>账号名 <input value={row.account} onChange={e => updateRow(index, "account", e.target.value)} placeholder="如：灵珠" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>发布内容 <input value={row.title} onChange={e => updateRow(index, "title", e.target.value)} placeholder="内容标题或描述" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>指标类型 <select value={row.metricType} onChange={e => updateRow(index, "metricType", e.target.value as "曝光量" | "播放量")} style={{ width: "100%", fontSize: 13 }}>
+              <option>曝光量</option><option>播放量</option>
+            </select></label>
+            <label style={{ fontSize: 12 }}>{row.metricType} <input type="number" value={row.exposure} onChange={e => updateRow(index, "exposure", e.target.value)} placeholder="必填" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>点赞 <input type="number" value={row.likes} onChange={e => updateRow(index, "likes", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>评论 <input type="number" value={row.comments} onChange={e => updateRow(index, "comments", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>收藏 <input type="number" value={row.saves} onChange={e => updateRow(index, "saves", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>分享 <input type="number" value={row.shares} onChange={e => updateRow(index, "shares", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>涨粉 <input type="number" value={row.followers} onChange={e => updateRow(index, "followers", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
+          </div>
+        </div>
+      ))}
+    </div>
+    {error && <p className="auth-message" style={{ marginTop: 8 }}>{error}</p>}
+    <div className="form-hint" style={{ marginTop: 8 }}><span>i</span>手动录入的数据同样需要 Leader 审核后才会进入正式看板。</div>
   </Modal>;
 }
 
