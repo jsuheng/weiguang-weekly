@@ -1141,23 +1141,27 @@ type ManualRow = {
   title: string;
   metricType: "曝光量" | "播放量";
   exposure: string;
+  exitRate: string;
+  fiveSecRate: string;
   likes: string;
   comments: string;
   saves: string;
   shares: string;
+  fullRate: string;
   followers: string;
 };
 
 function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader: string }) {
   const activePlatforms = platforms.filter(p => p.active);
-  const [rows, setRows] = useState<ManualRow[]>([{ platform: activePlatforms[0]?.name || "", account: "", title: "", metricType: "曝光量", exposure: "", likes: "", comments: "", saves: "", shares: "", followers: "" }]);
+  const emptyRow = (): ManualRow => ({ platform: activePlatforms[0]?.name || "", account: "", title: "", metricType: "曝光量", exposure: "", exitRate: "", fiveSecRate: "", likes: "", comments: "", saves: "", shares: "", fullRate: "", followers: "" });
+  const [rows, setRows] = useState<ManualRow[]>([emptyRow()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const updateRow = (index: number, field: keyof ManualRow, value: string) => {
     setRows(prev => prev.map((row, i) => i === index ? { ...row, [field]: value } : row));
   };
-  const addRow = () => setRows(prev => [...prev, { platform: activePlatforms[0]?.name || "", account: "", title: "", metricType: "曝光量", exposure: "", likes: "", comments: "", saves: "", shares: "", followers: "" }]);
+  const addRow = () => setRows(prev => [...prev, emptyRow()]);
   const removeRow = (index: number) => setRows(prev => prev.filter((_, i) => i !== index));
 
   const submit = async () => {
@@ -1166,9 +1170,9 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
     setSubmitting(true);
     setError("");
     try {
-      const headers = ["平台", "账号名", "发布内容", "曝光数｜播放量", "互动率", "点赞数", "评论数", "收藏数", "分享数", "涨粉数"];
+      const headers = ["平台", "账号名", "发布内容", "曝光数｜播放量", "2秒退出率", "5秒完播率", "互动率", "点赞数", "评论数", "收藏数", "分享数", "全篇完播率", "涨粉数"];
       const csvLines = [headers.join(","), ...validRows.map(r =>
-        [r.platform, r.account, r.title, r.exposure, "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.followers || "0"].join(",")
+        [r.platform, r.account, r.title, r.exposure, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"].join(",")
       )];
       const file = new File([new Blob(["﻿" + csvLines.join("\n")], { type: "text/csv" })], `手动录入_${new Date().toISOString().slice(0, 10)}.csv`, { type: "text/csv" });
       await onSave({
@@ -1207,6 +1211,9 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
               <option>曝光量</option><option>播放量</option>
             </select></label>
             <label style={{ fontSize: 12 }}>{row.metricType} <input type="number" value={row.exposure} onChange={e => updateRow(index, "exposure", e.target.value)} placeholder="必填" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>2秒退出率 (%) <input type="number" step="0.1" value={row.exitRate} onChange={e => updateRow(index, "exitRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>5秒完播率 (%) <input type="number" step="0.1" value={row.fiveSecRate} onChange={e => updateRow(index, "fiveSecRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>全篇完播率 (%) <input type="number" step="0.1" value={row.fullRate} onChange={e => updateRow(index, "fullRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>点赞 <input type="number" value={row.likes} onChange={e => updateRow(index, "likes", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>评论 <input type="number" value={row.comments} onChange={e => updateRow(index, "comments", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>收藏 <input type="number" value={row.saves} onChange={e => updateRow(index, "saves", e.target.value)} placeholder="0" style={{ width: "100%", fontSize: 13 }} /></label>
