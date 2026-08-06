@@ -42,21 +42,22 @@ export async function POST(request: Request) {
 
     // 入组申请：任何已验证用户均可发起，创建 pending 成员关系
     if (body.action === "join") {
-      if (!body.groupId) return Response.json({ error: "缺少小组编号" }, { status: 400 });
+      const targetGroupId = body.groupId;
+      if (!targetGroupId) return Response.json({ error: "缺少小组编号" }, { status: 400 });
 
       await ensureDatabase();
       const db = getDb();
 
       // 检查目标小组是否存在
       const [group] = await db.select({ id: groups.id, name: groups.name, ownerUserId: groups.ownerUserId })
-        .from(groups).where(eq(groups.id, body.groupId)).limit(1);
+        .from(groups).where(eq(groups.id, targetGroupId)).limit(1);
       if (!group) return Response.json({ error: "小组不存在" }, { status: 404 });
 
       // 检查是否已有活跃或待审核的成员关系
       const [existing] = await db.select({ id: groupMemberships.id, status: groupMemberships.status })
         .from(groupMemberships)
         .where(and(
-          eq(groupMemberships.groupId, body.groupId),
+          eq(groupMemberships.groupId, targetGroupId),
           eq(groupMemberships.userId, context.user.id),
         ))
         .limit(1);
@@ -68,18 +69,48 @@ export async function POST(request: Request) {
       const requestedRole = body.role === "leader" ? "leader" : "intern";
       const note = body.note?.trim().slice(0, 200) || null;
 
-      await db.insert(groupMemberships).values({
-        id: membershipId,
-        groupId: body.groupId,
-        userId: context.user.id,
-        role: requestedRole,
-        status: "pending",
-        note,
+      await db.transaction(async (transaction) => {
+        const values: Record<string, unknown> = {
+          id: membershipId,
+          groupId: targetGroupId,
+          userId: context.user.id,
+          role: requestedRole,
+          status: "pending",
+        };
+        if (note) values.note = note;
+        await transaction.insert(groupMemberships).values(values as typeof groupMemberships.$inferInsert);
+
+        // 同步写入工作区状态，让 Overview 能显示待审核成员
+        const [workspace] = await transaction.select().from(groupWorkspaceStates)
+          .where(eq(groupWorkspaceStates.groupId, targetGroupId)).limit(1);
+        if (workspace) {
+          const state = upgradeWorkspaceState({
+            ...JSON.parse(workspace.payload),
+            version: workspace.version,
+          } as WorkspaceState);
+          const memberAlready = state.members.find((m) => m.id === membershipId);
+          if (!memberAlready) {
+            const pendingMember: Member = {
+              id: membershipId,
+              name: context.user.displayName,
+              role: requestedRole,
+              status: "pending",
+              initials: context.user.displayName.slice(0, 1),
+              color: requestedRole === "leader" ? "#173f3a" : "#6389a8",
+              ...(note ? { note } : {}),
+            };
+            await transaction.update(groupWorkspaceStates).set({
+              version: state.version + 1,
+              payload: JSON.stringify({ ...state, version: state.version + 1, members: [...state.members, pendingMember] }),
+              updatedAt: sql`CURRENT_TIMESTAMP`,
+            }).where(eq(groupWorkspaceStates.groupId, targetGroupId));
+          }
+        }
       });
 
       await db.insert(activityEvents).values({
         id: `evt_${crypto.randomUUID()}`,
-        groupId: body.groupId,
+        groupId: targetGroupId,
         userId: context.user.id,
         actorName: context.user.displayName,
         action: "申请加入小组",

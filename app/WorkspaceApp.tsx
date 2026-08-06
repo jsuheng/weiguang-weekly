@@ -908,6 +908,16 @@ function Overview({ state, userName, deadline, onView, onTask, onImport }: { sta
   const submissionRate = state.reports.length > 0
     ? Math.round(state.reports.filter(r => r.status === "已提交" || r.status === "已点评").length / state.reports.length * 100)
     : 0;
+
+  // 待处理事项 — 基于实际数据动态计算
+  const pendingImports = state.imports.filter((batch) => batch.status === "待审核");
+  const pendingImportCount = pendingImports.length;
+  const totalWarnings = pendingImports.reduce((sum, batch) => sum + batch.warnings, 0);
+  const pendingMembers = state.members.filter((member) => member.status === "pending");
+  const pendingReports = state.reports.filter((report) => report.status === "已提交");
+
+  const hasPending = pendingImportCount > 0 || pendingMembers.length > 0 || pendingReports.length > 0;
+
   return (
     <>
       <PageTitle eyebrow={formatToday(new Date())} title={formatGreeting(new Date(), userName)} description={`本周数据表现稳定，有 ${state.tasks.filter(t => t.status === "已逾期").length} 项任务逾期、${state.reports.filter(r => r.status === "待修改" || r.status === "已提交").length} 份周报待处理。`} actions={<><button className="secondary" onClick={onImport}>导入运营数据</button><button className="primary" onClick={onTask}>＋ 发布任务</button></>} />
@@ -959,11 +969,20 @@ function Overview({ state, userName, deadline, onView, onTask, onImport }: { sta
 
       <section className="bottom-grid">
         <article className="panel">
-          <div className="panel-head"><div><h3>待处理事项</h3><span>需要你的关注</span></div></div>
+          <div className="panel-head"><div><h3>待处理事项</h3><span>{hasPending ? "需要你的关注" : "暂无待处理事项"}</span></div></div>
           <div className="attention-list">
-            <button onClick={() => onView("analytics")}><span className="attention-icon amber">数</span><div><b>1 批数据等待审核</b><small>其中 2 条存在字段警告</small></div><i>→</i></button>
-            <button onClick={() => onView("members")}><span className="attention-icon violet">人</span><div><b>1 位成员申请加入</b><small>谢可欣 · 35 分钟前</small></div><i>→</i></button>
-            <button onClick={() => onView("reports")}><span className="attention-icon blue">评</span><div><b>1 份周报等待点评</b><small>林小满 · 今天 15:42</small></div><i>→</i></button>
+            {pendingImportCount > 0 && (
+              <button onClick={() => onView("analytics")}><span className="attention-icon amber">数</span><div><b>{pendingImportCount} 批数据等待审核</b><small>{totalWarnings > 0 ? `其中 ${totalWarnings} 条存在字段警告` : "无字段警告"}</small></div><i>→</i></button>
+            )}
+            {pendingMembers.length > 0 && (
+              <button onClick={() => onView("members")}><span className="attention-icon violet">人</span><div><b>{pendingMembers.length} 位成员申请加入</b><small>{pendingMembers.map(m => m.name).join("、")}{pendingMembers[0]?.note ? ` · ${pendingMembers[0].note}` : ""}</small></div><i>→</i></button>
+            )}
+            {pendingReports.length > 0 && (
+              <button onClick={() => onView("reports")}><span className="attention-icon blue">评</span><div><b>{pendingReports.length} 份周报等待点评</b><small>{pendingReports.map(r => r.memberName).join("、")} · {pendingReports[0]?.updatedAt || ""}</small></div><i>→</i></button>
+            )}
+            {!hasPending && (
+              <div style={{ padding: "12px 16px", textAlign: "center", color: "var(--muted)", fontSize: 13 }}>暂无需要关注的事项 ✓</div>
+            )}
           </div>
         </article>
         <article className="panel week-card">
