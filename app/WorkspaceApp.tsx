@@ -1056,7 +1056,7 @@ function Members({ state }: { state: WorkspaceState }) {
       setBusy(false);
     }
   };
-  const operate = async (account: AccountView, action: "disable" | "enable" | "reset_password") => {
+  const operate = async (account: AccountView, action: "disable" | "enable" | "reset_password" | "delete") => {
     setBusy(true);
     setMessage("");
     try {
@@ -1079,7 +1079,7 @@ function Members({ state }: { state: WorkspaceState }) {
     {message && <p className="auth-message">{message}</p>}
     <article className="panel member-table"><table><thead><tr><th>成员</th><th>登录用户名</th><th>角色</th><th>密码状态</th><th>加入时间</th><th>操作</th></tr></thead><tbody>{shown.map((account) => {
       const member = state.members.find((item) => item.id === account.membershipId) || { name: account.displayName, initials: account.displayName.slice(0, 1), color: account.role === "leader" ? "#173f3a" : "#6389a8" };
-      return <tr key={account.id}><td><span className="assignee"><Avatar member={member} /> <b>{account.displayName}</b></span></td><td><code>{account.username}</code></td><td><StatusPill tone={account.role === "leader" ? "teal" : "neutral"}>{account.role === "leader" ? "Leader" : "实习生"}</StatusPill></td><td><StatusPill tone={account.mustChangePassword ? "amber" : "teal"}>{account.mustChangePassword ? "等待首次改密" : "已设置"}</StatusPill></td><td>{account.joinedAt || "—"}</td><td><div className="row-actions">{account.accountStatus === "active" ? <><button className="secondary" disabled={busy} onClick={() => operate(account, "reset_password")}>重置密码</button><button className="text-danger" disabled={busy} onClick={() => operate(account, "disable")}>停用</button></> : <button className="secondary" disabled={busy} onClick={() => operate(account, "enable")}>重新启用</button>}</div></td></tr>;
+      return <tr key={account.id}><td><span className="assignee"><Avatar member={member} /> <b>{account.displayName}</b></span></td><td><code>{account.username}</code></td><td><StatusPill tone={account.role === "leader" ? "teal" : "neutral"}>{account.role === "leader" ? "Leader" : "实习生"}</StatusPill></td><td><StatusPill tone={account.mustChangePassword ? "amber" : "teal"}>{account.mustChangePassword ? "等待首次改密" : "已设置"}</StatusPill></td><td>{account.joinedAt || "—"}</td><td><div className="row-actions">{account.accountStatus === "active" ? <><button className="secondary" disabled={busy} onClick={() => operate(account, "reset_password")}>重置密码</button><button className="text-danger" disabled={busy} onClick={() => operate(account, "disable")}>停用</button></> : <><button className="secondary" disabled={busy} onClick={() => operate(account, "enable")}>重新启用</button><button className="text-danger" disabled={busy} onClick={() => { if (!window.confirm(`确定永久删除「${account.displayName}」的账号吗？此操作不可撤销。`)) return; operate(account, "delete"); }}>删除</button></>}</div></td></tr>;
     })}</tbody></table></article>
     {createOpen && <Modal title="创建内部账号" subtitle="账号创建后会生成只展示一次的临时密码" onClose={() => setCreateOpen(false)} footer={<><button className="secondary" onClick={() => setCreateOpen(false)}>取消</button><button className="primary" disabled={busy || username.length < 3 || !displayName.trim()} onClick={create}>{busy ? "正在创建…" : "创建账号"}</button></>}>
       <label>登录用户名<input autoFocus value={username} onChange={(event) => setUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ""))} placeholder="例如：intern-lin" /></label>
@@ -1095,14 +1095,139 @@ function Members({ state }: { state: WorkspaceState }) {
 }
 
 function Settings({ onPasswordChange }: { onPasswordChange: () => void }) {
+  const weekdayLabels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  const [groupName, setGroupName] = useState("");
+  const [workStart, setWorkStart] = useState("10:00");
+  const [workEnd, setWorkEnd] = useState("19:00");
+  const [reportDeadlineWeekday, setReportDeadlineWeekday] = useState(5);
+  const [reportDeadlineTime, setReportDeadlineTime] = useState("19:00");
   const [weekend, setWeekend] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [leaving, setLeaving] = useState(false);
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    fetch("/api/groups")
+      .then(async (response) => response.ok ? response.json() : {})
+      .then((data) => {
+        if (data.groupConfig) {
+          setGroupName(data.groupConfig.name || "");
+          setWorkStart(data.groupConfig.workStart || "10:00");
+          setWorkEnd(data.groupConfig.workEnd || "19:00");
+          setReportDeadlineWeekday(data.groupConfig.reportDeadlineWeekday ?? 5);
+          setReportDeadlineTime(data.groupConfig.reportDeadlineTime || "19:00");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/groups", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: groupName.trim(),
+          workStart,
+          workEnd,
+          reportDeadlineWeekday,
+          reportDeadlineTime,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "保存失败");
+      setMessage("✓ 设置已保存");
+      setTimeout(() => setMessage(""), 3000);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createGroup = async () => {
+    if (!newGroupName.trim()) return;
+    setCreating(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newGroupName.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "创建小组失败");
+      setNewGroupName("");
+      setMessage("✓ 小组已创建，请刷新页面切换工作空间");
+      setTimeout(() => setMessage(""), 4000);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "创建小组失败");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const leaveGroup = async () => {
+    if (!window.confirm("确定要退出当前小组吗？退出后需要 Leader 重新分配才能加入。")) return;
+    setLeaving(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/groups", { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "退出小组失败");
+      window.location.assign("/");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "退出小组失败");
+      setLeaving(false);
+    }
+  };
+
   return <>
-    <PageTitle eyebrow="内容增长组" title="小组设置" description="工作规则、登录方式与通知渠道" actions={<button className="primary">保存设置</button>} />
+    <PageTitle eyebrow={groupName || "小组设置"} title="小组设置" description="工作规则、登录方式与通知渠道" actions={<><button className="primary" disabled={saving} onClick={save}>{saving ? "正在保存…" : "保存设置"}</button></>} />
+    {message && <p className="auth-message" style={message.startsWith("✓") ? { color: "#2e7d32", background: "#e8f5e9", borderColor: "#a5d6a7" } : {}}>{message}</p>}
     <div className="settings-grid">
-      <article className="panel settings-card"><h3>基本信息</h3><label>小组名称<input defaultValue="内容增长组" /></label><label>小组简介<textarea defaultValue="负责多平台内容运营、数据复盘与增长实验。" /></label><div className="setting-row"><div><b>内网专用</b><span>不开放搜索、注册或外部申请加入</span></div><StatusPill tone="teal">已启用</StatusPill></div></article>
-      <article className="panel settings-card"><h3>工作与周报</h3><div className="two-inputs"><label>工作开始<input type="time" defaultValue="10:00" /></label><label>工作结束<input type="time" defaultValue="19:00" /></label></div><label>周报截止<select defaultValue="周五 19:00"><option>周五 19:00</option></select></label><div className="setting-row"><div><b>周末任务提醒</b><span>普通提醒默认顺延到下周一</span></div><button className={`switch ${weekend ? "on" : ""}`} onClick={() => setWeekend(!weekend)}><i /></button></div></article>
-      <article className="panel settings-card"><h3>登录与安全</h3><div className="integration"><span className="inside">密</span><div><b>内部账号密码</b><small>账号由 Leader 创建，首次登录强制改密</small></div><StatusPill tone="teal">已启用</StatusPill></div><button className="secondary" onClick={onPasswordChange}>修改我的登录密码</button><p className="settings-note">连续 5 次登录失败会临时锁定账号 15 分钟。</p></article>
-      <article className="panel settings-card"><h3>通知渠道</h3><div className="integration"><span className="inside">站</span><div><b>站内通知</b><small>任务、周报、数据审核与账号动态</small></div><StatusPill tone="teal">已启用</StatusPill></div><p className="settings-note">提醒仅在工作台内发送，成员无需绑定外部联系方式。</p></article>
+      <article className="panel settings-card"><h3>基本信息</h3>
+        <label>小组名称<input value={groupName} onChange={(e) => setGroupName(e.target.value)} /></label>
+        <label>小组简介<textarea defaultValue="负责多平台内容运营、数据复盘与增长实验。" /></label>
+        <div className="setting-row"><div><b>内网专用</b><span>不开放搜索、注册或外部申请加入</span></div><StatusPill tone="teal">已启用</StatusPill></div>
+      </article>
+      <article className="panel settings-card"><h3>工作与周报</h3>
+        <div className="two-inputs"><label>工作开始<input type="time" value={workStart} onChange={(e) => setWorkStart(e.target.value)} /></label><label>工作结束<input type="time" value={workEnd} onChange={(e) => setWorkEnd(e.target.value)} /></label></div>
+        <label>周报截止
+          <select value={`${weekdayLabels[reportDeadlineWeekday]} ${reportDeadlineTime}`} onChange={(e) => {
+            const idx = weekdayLabels.indexOf(e.target.value.split(" ")[0]);
+            if (idx >= 0) setReportDeadlineWeekday(idx);
+          }}>
+            {weekdayLabels.map((day, idx) => <option key={idx}>{`${day} ${reportDeadlineTime}`}</option>)}
+          </select>
+        </label>
+        <div className="setting-row"><div><b>周末任务提醒</b><span>普通提醒默认顺延到下周一</span></div><button className={`switch ${weekend ? "on" : ""}`} onClick={() => setWeekend(!weekend)}><i /></button></div>
+      </article>
+      <article className="panel settings-card"><h3>登录与安全</h3>
+        <div className="integration"><span className="inside">密</span><div><b>内部账号密码</b><small>账号由 Leader 创建，首次登录强制改密</small></div><StatusPill tone="teal">已启用</StatusPill></div>
+        <button className="secondary" onClick={onPasswordChange}>修改我的登录密码</button>
+        <p className="settings-note">连续 5 次登录失败会临时锁定账号 15 分钟。</p>
+      </article>
+      <article className="panel settings-card"><h3>通知渠道</h3>
+        <div className="integration"><span className="inside">站</span><div><b>站内通知</b><small>任务、周报、数据审核与账号动态</small></div><StatusPill tone="teal">已启用</StatusPill></div>
+        <p className="settings-note">提醒仅在工作台内发送，成员无需绑定外部联系方式。</p>
+      </article>
+      <article className="panel settings-card"><h3>小组操作</h3>
+        <label>新建小组<input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="输入新小组名称" /></label>
+        <button className="primary" disabled={creating || !newGroupName.trim()} onClick={createGroup}>{creating ? "正在创建…" : "＋ 新建小组"}</button>
+        <p className="settings-note" style={{ marginTop: 8 }}>创建后可在左上角切换至新小组，原小组数据不受影响。</p>
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+          <div><b>退出当前小组</b><span style={{ display: "block", fontSize: 12, color: "var(--muted)" }}>退出后需要 Leader 重新分配才能加入</span></div>
+          <button className="secondary" disabled={leaving} onClick={leaveGroup} style={{ marginTop: 8, color: "#c44" }}>{leaving ? "正在退出…" : "退出小组"}</button>
+        </div>
+      </article>
     </div>
   </>;
 }

@@ -18,10 +18,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const active = requireActiveMembership(context);
     requireRole(context, "leader");
     const { id } = await params;
-    const body = await request.json() as { action?: "disable" | "enable" | "reset_password" };
+    const body = await request.json() as { action?: "disable" | "enable" | "reset_password" | "delete" };
     if (!body.action) return Response.json({ error: "缺少账号操作" }, { status: 400 });
     if (id === context.user.id && body.action !== "enable") {
-      return Response.json({ error: "不能在成员管理中停用或重置自己的账号" }, { status: 403 });
+      return Response.json({ error: "不能在成员管理中停用、删除或重置自己的账号" }, { status: 403 });
     }
 
     const db = getDb();
@@ -37,14 +37,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       .limit(1);
     if (!target) return Response.json({ error: "成员账号不存在" }, { status: 404 });
 
-    if (body.action === "disable" && target.role === "leader") {
+    // 删除操作只允许对已停用/已离开的账号执行
+    if (body.action === "delete") {
+      const [membership] = await db.select({ status: groupMemberships.status }).from(groupMemberships)
+        .where(eq(groupMemberships.id, target.membershipId)).limit(1);
+      if (membership && membership.status === "active") {
+        return Response.json({ error: "请先停用该成员后再删除" }, { status: 400 });
+      }
+    }
+
+    if ((body.action === "disable" || body.action === "delete") && target.role === "leader") {
       const leaders = await db.select({ id: groupMemberships.id }).from(groupMemberships).where(and(
         eq(groupMemberships.groupId, active.groupId),
         eq(groupMemberships.role, "leader"),
         eq(groupMemberships.status, "active"),
         ne(groupMemberships.userId, target.userId),
       ));
-      if (!leaders.length) return Response.json({ error: "不能停用最后一个有效 Leader" }, { status: 409 });
+      if (!leaders.length) return Response.json({ error: body.action === "delete" ? "不能删除最后一个有效 Leader" : "不能停用最后一个有效 Leader" }, { status: 409 });
     }
 
     let temporaryPassword: string | undefined;
@@ -59,6 +68,34 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           updatedAt: sql`CURRENT_TIMESTAMP`,
         }).where(eq(users.id, target.userId));
         await transaction.delete(sessions).where(eq(sessions.userId, target.userId));
+      } else if (body.action === "delete") {
+        // 永久删除：移除小组成员关系、清理工作区数据
+        await transaction.delete(groupMemberships).where(eq(groupMemberships.id, target.membershipId));
+        await transaction.delete(sessions).where(eq(sessions.userId, target.userId));
+
+        // 检查该用户是否还有其他小组的成员关系
+        const [otherMembership] = await transaction.select({ id: groupMemberships.id })
+          .from(groupMemberships).where(eq(groupMemberships.userId, target.userId)).limit(1);
+        if (!otherMembership) {
+          await transaction.delete(users).where(eq(users.id, target.userId));
+        }
+
+        const [workspace] = await transaction.select().from(groupWorkspaceStates).where(eq(groupWorkspaceStates.groupId, active.groupId)).limit(1);
+        if (workspace) {
+          const state = upgradeWorkspaceState({ ...JSON.parse(workspace.payload), version: workspace.version } as WorkspaceState);
+          const nextState = {
+            ...state,
+            version: workspace.version + 1,
+            members: state.members.filter((member) => member.id !== target.membershipId),
+            reports: state.reports.filter((report) => report.memberId !== target.membershipId),
+            tasks: state.tasks.map((task) => task.assignee === target.displayName && task.status !== "已完成" ? { ...task, status: "待转交" as const } : task),
+          };
+          await transaction.update(groupWorkspaceStates).set({
+            version: nextState.version,
+            payload: JSON.stringify(nextState),
+            updatedAt: sql`CURRENT_TIMESTAMP`,
+          }).where(eq(groupWorkspaceStates.groupId, active.groupId));
+        }
       } else {
         const enabled = body.action === "enable";
         await transaction.update(users).set({
@@ -92,7 +129,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         groupId: active.groupId,
         userId: context.user.id,
         actorName: context.user.displayName,
-        action: body.action === "reset_password" ? "重置成员密码" : body.action === "enable" ? "启用成员账号" : "停用成员账号",
+        action: body.action === "reset_password" ? "重置成员密码" : body.action === "enable" ? "启用成员账号" : body.action === "delete" ? "删除成员账号" : "停用成员账号",
         target: target.displayName,
       });
     });
