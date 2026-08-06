@@ -257,7 +257,7 @@ function NoWorkspace({ session }: { session: SessionView }) {
       const response = await fetch("/api/memberships", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "join", groupId, role: "intern" }),
+        body: JSON.stringify({ action: "join", groupId, role: session.memberships.some(m => m.role === "leader") ? "leader" : "intern" }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "申请失败");
@@ -343,7 +343,7 @@ function WorkspaceSwitcher({ session }: { session: SessionView }) {
       const response = await fetch("/api/memberships", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "join", groupId, role: "intern" }),
+        body: JSON.stringify({ action: "join", groupId, role: session.memberships.some(m => m.role === "leader") ? "leader" : "intern" }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "申请失败");
