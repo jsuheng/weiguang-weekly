@@ -28,6 +28,7 @@ export async function GET(request: Request) {
       accountStatus: users.status,
       mustChangePassword: users.mustChangePassword,
       joinedAt: groupMemberships.joinedAt,
+      note: groupMemberships.note,
     }).from(groupMemberships)
       .innerJoin(users, eq(groupMemberships.userId, users.id))
       .where(eq(groupMemberships.groupId, active.groupId));

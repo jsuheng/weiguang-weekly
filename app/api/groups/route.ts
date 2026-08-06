@@ -1,6 +1,6 @@
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, ne, or, sql } from "drizzle-orm";
 import { ensureDatabase, getDb } from "../../../db";
-import { activityEvents, groupMemberships, groups, groupWorkspaceStates, sessions } from "../../../db/schema";
+import { activityEvents, groupMemberships, groups, groupWorkspaceStates, sessions, users } from "../../../db/schema";
 import { authErrorResponse, requireActiveMembership, requireAuthContext, requireRole } from "../../../lib/auth";
 import { getOrCreateGroupState, syncMembershipsFromWorkspace, upgradeWorkspaceState } from "../../../lib/workspace";
 import type { WorkspaceState } from "../../../lib/types";
@@ -10,6 +10,56 @@ import { randomToken } from "../../../lib/auth";
 export async function GET(request: Request) {
   try {
     const context = await requireAuthContext(request);
+    const url = new URL(request.url);
+    const searchQuery = url.searchParams.get("search")?.trim();
+
+    // 搜索小组模式：返回所有匹配名称的小组（不含当前用户已加入的）
+    if (searchQuery && searchQuery.length >= 1) {
+      await ensureDatabase();
+      const db = getDb();
+      const userMembershipGroupIds = context.memberships
+        .filter((m) => m.status === "active" || m.status === "pending")
+        .map((m) => m.groupId);
+
+      const conditions: Array<ReturnType<typeof sql>> = [sql`${groups.name} ILIKE ${`%${searchQuery}%`}`];
+      for (const gid of userMembershipGroupIds) {
+        conditions.push(ne(groups.id, gid));
+      }
+
+      const rows = await db.select({
+        id: groups.id,
+        name: groups.name,
+        ownerUserId: groups.ownerUserId,
+        createdAt: groups.createdAt,
+      }).from(groups).where(and(...conditions)).orderBy(groups.name).limit(20);
+
+      // 获取每个小组的成员数量和 owner 姓名
+      const results = await Promise.all(rows.map(async (g) => {
+        const [owner] = await db.select({ displayName: users.displayName })
+          .from(users).where(eq(users.id, g.ownerUserId)).limit(1);
+        const [count] = await db.select({ count: sql<number>`count(*)::int` })
+          .from(groupMemberships)
+          .where(and(eq(groupMemberships.groupId, g.id), eq(groupMemberships.status, "active")));
+        // 检查是否已有待审核的申请
+        const [pending] = await db.select({ id: groupMemberships.id })
+          .from(groupMemberships)
+          .where(and(
+            eq(groupMemberships.groupId, g.id),
+            eq(groupMemberships.userId, context.user.id),
+            eq(groupMemberships.status, "pending"),
+          )).limit(1);
+        return {
+          id: g.id,
+          name: g.name,
+          ownerName: owner?.displayName || "未知",
+          memberCount: count?.count || 0,
+          hasPendingRequest: !!pending,
+        };
+      }));
+
+      return Response.json({ groups: results });
+    }
+
     let groupConfig = null;
     if (context.activeMembership) {
       await ensureDatabase();

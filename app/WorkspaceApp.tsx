@@ -223,16 +223,97 @@ function PasswordChange({ session, forced = false, onClose }: { session: Session
 }
 
 function NoWorkspace({ session }: { session: SessionView }) {
-  return <div className="auth-screen onboarding-screen"><section className="auth-card onboarding-card">
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Array<{ id: string; name: string; ownerName: string; memberCount: number; hasPendingRequest: boolean }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [message, setMessage] = useState("");
+  const [joining, setJoining] = useState<string | null>(null);
+  const [pendingMemberships, setPendingMemberships] = useState<Array<{ id: string; groupId: string; groupName: string }>>([]);
+
+  // 检查是否有待审核的入组申请
+  useEffect(() => {
+    const pending = session.memberships
+      .filter((m) => m.status === "pending")
+      .map((m) => ({ id: m.id, groupId: m.groupId, groupName: m.groupName }));
+    setPendingMemberships(pending);
+  }, [session.memberships]);
+
+  const search = async (value: string) => {
+    setQuery(value);
+    if (value.trim().length < 1) { setResults([]); return; }
+    setSearching(true);
+    try {
+      const response = await fetch(`/api/groups?search=${encodeURIComponent(value.trim())}`);
+      const data = await response.json();
+      if (response.ok) setResults(data.groups || []);
+    } catch { setResults([]); }
+    finally { setSearching(false); }
+  };
+
+  const join = async (groupId: string) => {
+    setJoining(groupId);
+    setMessage("");
+    try {
+      const response = await fetch("/api/memberships", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "join", groupId, role: "intern" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "申请失败");
+      setMessage(`✓ 已向小组发送入组申请，请等待 Leader 审核`);
+      // 刷新页面以更新 session
+      setTimeout(() => window.location.reload(), 2000);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "申请发送失败");
+    } finally {
+      setJoining(null);
+    }
+  };
+
+  return <div className="auth-screen onboarding-screen"><section className="auth-card onboarding-card" style={{ maxWidth: 520 }}>
     <div className="auth-brand"><BrandMark /><div><strong>欢迎，{session.user.displayName}</strong><span>{session.user.username}</span></div></div>
-    <h1>账号尚未分配工作空间</h1>
-    <p className="password-guidance">内部版不开放自助注册或申请加入。请联系 Leader 为该账号分配小组和职位。</p>
+    <h1>加入工作小组</h1>
+    <p className="password-guidance">搜索已有小组并发起入组申请，等待该组 Leader 审核通过后即可进入工作空间。</p>
+
+    {pendingMemberships.length > 0 && <div className="pending-requests" style={{ marginBottom: 16, padding: "12px 16px", background: "#fff8e1", borderRadius: 8, border: "1px solid #ffe082" }}>
+      <b style={{ fontSize: 13 }}>你已有 {pendingMemberships.length} 条待审核的入组申请：</b>
+      {pendingMemberships.map((m) => <div key={m.id} style={{ fontSize: 13, marginTop: 4 }}>{m.groupName} — <StatusPill tone="amber">等待审核</StatusPill></div>)}
+    </div>}
+
+    <label className="search" style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)" }}>
+      <span>⌕</span>
+      <input aria-label="搜索小组" placeholder="输入小组名称搜索…" value={query} onChange={(e) => search(e.target.value)} style={{ border: "none", outline: "none", width: "100%", fontSize: 14, background: "transparent" }} />
+      {searching && <span style={{ fontSize: 12, color: "var(--muted)" }}>搜索中…</span>}
+    </label>
+
+    {message && <p className="auth-message" style={message.startsWith("✓") ? { color: "#2e7d32", background: "#e8f5e9", borderColor: "#a5d6a7" } : {}}>{message}</p>}
+
+    {results.length > 0 && <div className="group-search-results" style={{ maxHeight: 360, overflowY: "auto", marginBottom: 16 }}>
+      {results.map((g) => <article key={g.id} style={{ padding: "12px 16px", border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <b style={{ fontSize: 14 }}>{g.name}</b>
+          <small style={{ display: "block", color: "var(--muted)", fontSize: 12 }}>组长：{g.ownerName} · {g.memberCount} 名成员</small>
+        </div>
+        {g.hasPendingRequest
+          ? <StatusPill tone="amber">已申请</StatusPill>
+          : <button className="primary" style={{ fontSize: 12, padding: "4px 14px" }} disabled={joining === g.id} onClick={() => join(g.id)}>{joining === g.id ? "申请中…" : "申请加入"}</button>}
+      </article>)}</div>}
+
+    {query && !searching && results.length === 0 && <p style={{ fontSize: 13, color: "var(--muted)", textAlign: "center", marginBottom: 16 }}>未找到匹配的小组</p>}
+
     <button className="secondary auth-submit" onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.assign("/"); }}>退出登录</button>
   </section></div>;
 }
 
 function WorkspaceSwitcher({ session }: { session: SessionView }) {
   const [open, setOpen] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Array<{ id: string; name: string; ownerName: string; memberCount: number; hasPendingRequest: boolean }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [joining, setJoining] = useState<string | null>(null);
+  const [joinMessage, setJoinMessage] = useState("");
   const activeMemberships = session.memberships.filter((item) => item.status === "active");
   const switchTo = async (groupId: string) => {
     if (groupId === session.activeMembership?.groupId) {
@@ -242,13 +323,79 @@ function WorkspaceSwitcher({ session }: { session: SessionView }) {
     const response = await fetch("/api/auth/switch-workspace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId }) });
     if (response.ok) window.location.assign("/");
   };
+
+  const doSearch = async (value: string) => {
+    setSearchQuery(value);
+    if (value.trim().length < 1) { setSearchResults([]); return; }
+    setSearching(true);
+    try {
+      const response = await fetch(`/api/groups?search=${encodeURIComponent(value.trim())}`);
+      const data = await response.json();
+      if (response.ok) setSearchResults(data.groups || []);
+    } catch { setSearchResults([]); }
+    finally { setSearching(false); }
+  };
+
+  const doJoin = async (groupId: string) => {
+    setJoining(groupId);
+    setJoinMessage("");
+    try {
+      const response = await fetch("/api/memberships", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "join", groupId, role: "intern" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "申请失败");
+      setJoinMessage("✓ 入组申请已发送");
+    } catch (error) {
+      setJoinMessage(error instanceof Error ? error.message : "申请发送失败");
+    } finally {
+      setJoining(null);
+    }
+  };
+
   return <div className="workspace-switch-wrap">
-    <button className="group-switcher" type="button" onClick={() => setOpen((value) => !value)}>
+    <button className="group-switcher" type="button" onClick={() => { setOpen((value) => !value); setSearchMode(false); setSearchQuery(""); setSearchResults([]); }}>
       <span className="group-avatar">{session.activeMembership?.groupName.slice(0, 1)}</span>
       <span><b>{session.activeMembership?.groupName}</b><small>{session.activeMembership?.role === "leader" ? "Leader" : "实习生"} 工作空间</small></span>
       <i>⌄</i>
     </button>
-    {open && <div className="workspace-menu">{activeMemberships.map((item) => <button key={item.id} onClick={() => switchTo(item.groupId)} className={item.groupId === session.activeMembership?.groupId ? "active" : ""}><span>{item.groupName.slice(0, 1)}</span><div><b>{item.groupName}</b><small>{item.role === "leader" ? "Leader" : "实习生"}</small></div>{item.groupId === session.activeMembership?.groupId && <i>✓</i>}</button>)}</div>}
+    {open && <div className="workspace-menu" style={{ minWidth: 280 }}>
+      {!searchMode ? <>
+        <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
+          <b style={{ fontSize: 12, color: "var(--muted)" }}>我的小组</b>
+        </div>
+        {activeMemberships.map((item) => <button key={item.id} onClick={() => switchTo(item.groupId)} className={item.groupId === session.activeMembership?.groupId ? "active" : ""}><span>{item.groupName.slice(0, 1)}</span><div><b>{item.groupName}</b><small>{item.role === "leader" ? "Leader" : "实习生"}</small></div>{item.groupId === session.activeMembership?.groupId && <i>✓</i>}</button>)}
+        <div style={{ borderTop: "1px solid var(--border)", padding: "8px 12px" }}>
+          <button className="secondary" style={{ width: "100%", fontSize: 12 }} onClick={() => setSearchMode(true)}>＋ 搜索并加入其他小组</button>
+        </div>
+      </> : <>
+        <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
+          <button className="secondary" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => { setSearchMode(false); setSearchQuery(""); setSearchResults([]); }}>← 返回</button>
+          <b style={{ fontSize: 12 }}>搜索小组</b>
+        </div>
+        <div style={{ padding: "8px 12px" }}>
+          <label className="search" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)" }}>
+            <span>⌕</span>
+            <input aria-label="搜索小组" placeholder="输入小组名称…" value={searchQuery} onChange={(e) => doSearch(e.target.value)} style={{ border: "none", outline: "none", width: "100%", fontSize: 13, background: "transparent" }} autoFocus />
+            {searching && <span style={{ fontSize: 11, color: "var(--muted)" }}>…</span>}
+          </label>
+        </div>
+        {joinMessage && <p style={{ padding: "4px 12px", fontSize: 12, margin: 0, color: joinMessage.startsWith("✓") ? "#2e7d32" : "#c44" }}>{joinMessage}</p>}
+        {searchResults.length > 0 && <div style={{ maxHeight: 240, overflowY: "auto" }}>
+          {searchResults.map((g) => <button key={g.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", width: "100%", border: "none", borderBottom: "1px solid var(--border)", background: "transparent", cursor: "default" }}>
+            <div style={{ textAlign: "left" }}>
+              <b style={{ fontSize: 13 }}>{g.name}</b>
+              <small style={{ display: "block", color: "var(--muted)", fontSize: 11 }}>{g.ownerName} · {g.memberCount} 人</small>
+            </div>
+            {g.hasPendingRequest
+              ? <StatusPill tone="amber">已申请</StatusPill>
+              : <button className="primary" style={{ fontSize: 11, padding: "2px 10px" }} disabled={joining === g.id} onClick={(e) => { e.stopPropagation(); doJoin(g.id); }}>{joining === g.id ? "…" : "申请加入"}</button>}
+          </button>)}</div>}
+        {searchQuery && !searching && searchResults.length === 0 && <p style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", textAlign: "center" }}>未找到匹配的小组</p>}
+      </>}
+    </div>}
   </div>;
 }
 
@@ -1018,10 +1165,11 @@ type AccountView = {
   accountStatus: "active" | "disabled";
   mustChangePassword: boolean;
   joinedAt: string | null;
+  note: string | null;
 };
 
 function Members({ state }: { state: WorkspaceState }) {
-  const [tab, setTab] = useState<"在组成员" | "已停用">("在组成员");
+  const [tab, setTab] = useState<"在组成员" | "入组申请" | "已停用">("在组成员");
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [username, setUsername] = useState("");
@@ -1040,6 +1188,9 @@ function Members({ state }: { state: WorkspaceState }) {
       .then(async (response) => response.ok ? response.json() : { accounts: [] })
       .then((data) => setAccounts(data.accounts || []));
   }, []);
+
+  const pendingCount = accounts.filter((a) => a.membershipStatus === "pending").length;
+
   const create = async () => {
     setBusy(true);
     setMessage("");
@@ -1071,16 +1222,49 @@ function Members({ state }: { state: WorkspaceState }) {
       setBusy(false);
     }
   };
-  const shown = accounts.filter((account) => tab === "在组成员" ? account.accountStatus === "active" && account.membershipStatus === "active" : account.accountStatus === "disabled" || account.membershipStatus === "left");
+
+  const reviewMembership = async (membershipId: string, action: "approve" | "reject") => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/memberships", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ membershipId, action }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "审核操作失败");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "审核操作失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shown = accounts.filter((account) => {
+    if (tab === "入组申请") return account.membershipStatus === "pending";
+    if (tab === "在组成员") return account.accountStatus === "active" && account.membershipStatus === "active";
+    return account.accountStatus === "disabled" || account.membershipStatus === "left";
+  });
+
   return <>
     <PageTitle eyebrow="内部账号" title="成员管理" description={`${accounts.filter((account) => account.accountStatus === "active" && account.membershipStatus === "active").length || state.members.filter((member) => member.status === "active").length} 名有效成员 · 账号与角色由 Leader 统一管理`} actions={<button className="primary" onClick={() => setCreateOpen(true)}>＋ 创建内部账号</button>} />
     <div className="member-banner"><div><span>账</span><div><h3>内部账号管理</h3><p>新账号使用一次性临时密码，成员首次登录后必须设置个人密码。</p></div></div><StatusPill tone="teal">内网专用</StatusPill></div>
-    <div className="segmented member-tabs">{(["在组成员", "已停用"] as const).map((item) => <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>{item}</button>)}</div>
+    <div className="segmented member-tabs">{(["在组成员", "入组申请", "已停用"] as const).map((item) => <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>{item}{item === "入组申请" && pendingCount > 0 && <em className="amber" style={{ marginLeft: 4, fontSize: 11 }}>{pendingCount}</em>}</button>)}</div>
     {message && <p className="auth-message">{message}</p>}
-    <article className="panel member-table"><table><thead><tr><th>成员</th><th>登录用户名</th><th>角色</th><th>密码状态</th><th>加入时间</th><th>操作</th></tr></thead><tbody>{shown.map((account) => {
+
+    {/* 入组申请 tab */}
+    {tab === "入组申请" && <article className="panel member-table"><table><thead><tr><th>申请人</th><th>登录用户名</th><th>申请职位</th><th>申请备注</th><th>密码状态</th><th>操作</th></tr></thead><tbody>{shown.length ? shown.map((account) => {
+      const member = state.members.find((item) => item.id === account.membershipId) || { name: account.displayName, initials: account.displayName.slice(0, 1), color: "#6389a8", note: "" };
+      return <tr key={account.id}><td><span className="assignee"><Avatar member={member} /> <b>{account.displayName}</b></span></td><td><code>{account.username}</code></td><td><StatusPill tone={account.role === "leader" ? "teal" : "neutral"}>{account.role === "leader" ? "Leader" : "实习生"}</StatusPill></td><td style={{ fontSize: 13, color: "var(--muted)" }}>{member.note || account.note || "—"}</td><td><StatusPill tone={account.mustChangePassword ? "amber" : "teal"}>{account.mustChangePassword ? "等待首次改密" : "已设置"}</StatusPill></td><td><div className="row-actions"><button className="primary" style={{ fontSize: 12, padding: "3px 12px" }} disabled={busy} onClick={() => reviewMembership(account.membershipId, "approve")}>批准</button><button className="secondary" disabled={busy} onClick={() => reviewMembership(account.membershipId, "reject")}>拒绝</button></div></td></tr>;
+    }) : <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--muted)" }}>暂无待审核的入组申请</td></tr>}</tbody></table></article>}
+
+    {/* 在组成员 / 已停用 tab */}
+    {tab !== "入组申请" && <article className="panel member-table"><table><thead><tr><th>成员</th><th>登录用户名</th><th>角色</th><th>密码状态</th><th>加入时间</th><th>操作</th></tr></thead><tbody>{shown.map((account) => {
       const member = state.members.find((item) => item.id === account.membershipId) || { name: account.displayName, initials: account.displayName.slice(0, 1), color: account.role === "leader" ? "#173f3a" : "#6389a8" };
       return <tr key={account.id}><td><span className="assignee"><Avatar member={member} /> <b>{account.displayName}</b></span></td><td><code>{account.username}</code></td><td><StatusPill tone={account.role === "leader" ? "teal" : "neutral"}>{account.role === "leader" ? "Leader" : "实习生"}</StatusPill></td><td><StatusPill tone={account.mustChangePassword ? "amber" : "teal"}>{account.mustChangePassword ? "等待首次改密" : "已设置"}</StatusPill></td><td>{account.joinedAt || "—"}</td><td><div className="row-actions">{account.accountStatus === "active" ? <><button className="secondary" disabled={busy} onClick={() => operate(account, "reset_password")}>重置密码</button><button className="text-danger" disabled={busy} onClick={() => operate(account, "disable")}>停用</button></> : <><button className="secondary" disabled={busy} onClick={() => operate(account, "enable")}>重新启用</button><button className="text-danger" disabled={busy} onClick={() => { if (!window.confirm(`确定永久删除「${account.displayName}」的账号吗？此操作不可撤销。`)) return; operate(account, "delete"); }}>删除</button></>}</div></td></tr>;
-    })}</tbody></table></article>
+    })}</tbody></table></article>}
     {createOpen && <Modal title="创建内部账号" subtitle="账号创建后会生成只展示一次的临时密码" onClose={() => setCreateOpen(false)} footer={<><button className="secondary" onClick={() => setCreateOpen(false)}>取消</button><button className="primary" disabled={busy || username.length < 3 || !displayName.trim()} onClick={create}>{busy ? "正在创建…" : "创建账号"}</button></>}>
       <label>登录用户名<input autoFocus value={username} onChange={(event) => setUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ""))} placeholder="例如：intern-lin" /></label>
       <label>成员姓名<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：林小满" /></label>
