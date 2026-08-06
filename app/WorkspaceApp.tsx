@@ -63,19 +63,6 @@ function formatGreeting(date: Date, name: string) {
   return `${word}，${name}`;
 }
 
-function computeWeeklyExposure(rows: { exposure: number }[]) {
-  // 简化：将数据均分为最多12周展示
-  if (!rows.length) return [];
-  const weeks = Math.min(12, rows.length);
-  const perWeek = Math.ceil(rows.length / weeks);
-  const result: number[] = [];
-  for (let i = 0; i < weeks; i++) {
-    const slice = rows.slice(i * perWeek, (i + 1) * perWeek);
-    result.push(slice.reduce((sum, r) => sum + r.exposure, 0));
-  }
-  return result;
-}
-
 function computeDeadline(now: Date) {
   const day = now.getDay();
   let daysUntilFriday = 5 - day; // 0=Sun, 5=Fri
@@ -688,9 +675,27 @@ function InternAnalytics({ state, imports, member, onImport, onManualEntry, onDe
   const weightedEngage = totalExposure > 0
     ? (myRows.reduce((sum, row) => sum + row.engage * row.exposure, 0) / totalExposure).toFixed(1)
     : "—";
-  // 按周汇总曝光量用于趋势图
-  const weeklyExposure = computeWeeklyExposure(myRows);
-  const maxWeekly = Math.max(1, ...weeklyExposure);
+  // 按周期汇总分发量与互动率用于趋势图
+  const periodChartData = (() => {
+    const groups = new Map<string, { distribution: number; engagementSum: number; engagementWeight: number }>();
+    for (const row of myRows) {
+      const key = row.period || "未分类";
+      const cur = groups.get(key) || { distribution: 0, engagementSum: 0, engagementWeight: 0 };
+      cur.distribution += row.exposure;
+      cur.engagementSum += row.engage * row.exposure;
+      cur.engagementWeight += row.exposure;
+      groups.set(key, cur);
+    }
+    return [...groups.entries()]
+      .filter(([, d]) => d.distribution > 0)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, d]) => ({
+        period: period.length > 10 ? period.slice(0, 10) : period,
+        distribution: d.distribution,
+        engagement: d.engagementWeight > 0 ? Math.round(d.engagementSum / d.engagementWeight * 10) / 10 : 0,
+      }));
+  })();
+  const maxChartDist = Math.max(1, ...periodChartData.map(d => d.distribution));
 
   return <>
     <PageTitle eyebrow={`账号数据 · ${selectedPeriod === "全部周期" ? "全部周期" : selectedPeriod}`} title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
@@ -707,13 +712,13 @@ function InternAnalytics({ state, imports, member, onImport, onManualEntry, onDe
     </section>
     <section className="analytics-grid">
       <article className="panel wide-chart">
-        <div className="panel-head"><div><h3>负责账号表现</h3><span>近 12 周 · 周期新增量</span></div><div className="legend"><i className="teal-dot" /> 分发量 <i className="orange-dot" /> 互动率</div></div>
-        {weeklyExposure.length > 0 ? (
-          <div className="line-chart"><div className="grid-lines">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div><div className="chart-columns">{weeklyExposure.map((value, index) => <div key={index}><i style={{ height: `${Math.max(4, (value / maxWeekly) * 100)}%` }}><span /></i><em style={{ bottom: `${Math.max(10, (value / maxWeekly) * 55)}%` }} /></div>)}</div></div>
+        <div className="panel-head"><div><h3>负责账号表现</h3><span>{periodChartData.length ? `${periodChartData.length} 个周期` : "暂无周期数据"}</span></div><div className="legend"><i className="teal-dot" /> 分发量 <i className="orange-dot" /> 互动率</div></div>
+        {periodChartData.length > 0 ? (
+          <div className="line-chart"><div className="grid-lines">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div><div className="chart-columns">{periodChartData.map((d, index) => <div key={index}><i style={{ height: `${Math.max(4, (d.distribution / maxChartDist) * 100)}%` }} title={`${d.period}: ${formatNumber(d.distribution)}`}><span /></i><em style={{ bottom: `${Math.max(10, Math.min(90, (d.engagement || 2)))}%` }} title={`${d.period}: 互动率 ${d.engagement}%`} /></div>)}</div></div>
         ) : (
           <p className="empty-state" style={{ padding: 40, textAlign: "center" }}>暂无内容数据，导入并审批通过后将在此展示趋势</p>
         )}
-        <div className="axis">{weeklyExposure.length > 0 ? weeklyExposure.map((_, i) => <span key={i}>W{i + 1}</span>) : null}</div>
+        <div className="axis">{periodChartData.length > 0 ? periodChartData.map((d, i) => <span key={i} title={d.period}>{d.period.slice(0, 5)}</span>) : null}</div>
       </article>
       <article className="panel">
         <div className="panel-head"><div><h3>我的导入记录</h3><span>{filteredImports.length} 批</span></div></div>
@@ -859,9 +864,10 @@ function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, o
     return Math.round(available.reduce((sum, row) => sum + Number(row[field]) * row.exposure, 0) / denominator * 10) / 10;
   };
   const weightedExit = weightedMetric("exit");
+  const weightedFive = weightedMetric("five");
   const retentionRows = [
-    { label: "2秒留存率", value: weightedExit == null ? null : Math.round((100 - weightedExit) * 10) / 10 },
-    { label: "5秒完播率", value: weightedMetric("five") },
+    { label: "2秒退出率", value: weightedExit },
+    { label: "5秒退出率", value: weightedFive != null ? Math.round((100 - weightedFive) * 10) / 10 : null },
     { label: "全篇完播率", value: weightedMetric("complete") },
   ];
   const topRows = [...filteredRows].sort((left, right) => right.engage - left.engage || left.exposure - right.exposure).slice(0, 3);
@@ -870,6 +876,27 @@ function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, o
     return { ...item, total: rows.reduce((sum, row) => sum + row.exposure, 0), hasData: rows.length > 0 };
   });
   const maxPlatformTotal = Math.max(1, ...platformStats.map((item) => item.total));
+  // 按周期统计分发量与互动率用于趋势图
+  const periodChartData = (() => {
+    const groups = new Map<string, { distribution: number; engagementSum: number; engagementWeight: number }>();
+    for (const row of periodFilteredRows) {
+      const key = ("period" in row && row.period) ? row.period : "未分类";
+      const cur = groups.get(key) || { distribution: 0, engagementSum: 0, engagementWeight: 0 };
+      cur.distribution += row.exposure;
+      cur.engagementSum += row.engage * row.exposure;
+      cur.engagementWeight += row.exposure;
+      groups.set(key, cur);
+    }
+    return [...groups.entries()]
+      .filter(([, d]) => d.distribution > 0)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, d]) => ({
+        period: period.length > 10 ? period.slice(0, 10) : period,
+        distribution: d.distribution,
+        engagement: d.engagementWeight > 0 ? Math.round(d.engagementSum / d.engagementWeight * 10) / 10 : 0,
+      }));
+  })();
+  const maxChartDist = Math.max(1, ...periodChartData.map(d => d.distribution));
   return (
     <>
       <PageTitle eyebrow={`账号数据 · ${selectedPeriod === "全部周期" ? "全部周期" : selectedPeriod}`} title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
@@ -886,22 +913,26 @@ function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, o
             ["总互动量", formatNumber(interactions), "赞评藏转合计"],
             ["内容归因涨粉", `+${formatNumber(followerGain)}`, "非账号净增粉"],
             ["每千次分发互动", interactionsPerThousand.toFixed(1), "统一计算指标"],
-            ["2秒留存率", weightedExit != null ? `${Math.round((100 - weightedExit) * 10) / 10}%` : "—", "按分发量加权"],
+            ["2秒退出率", weightedExit != null ? `${weightedExit}%` : "—", "按分发量加权"],
           ].map(([label, value, note]) => <article key={label}><p>{label}<span>···</span></p><strong>{value}</strong><small>{note}</small></article>)}
         </section>
         <section className="analytics-grid">
           <article className="panel wide-chart">
-            <div className="panel-head"><div><h3>分发与互动趋势</h3><span>近 12 周 · {basis}</span></div><div className="legend"><i className="teal-dot" /> 分发量 <i className="orange-dot" /> 互动率</div></div>
-            <div className="line-chart">
-              <div className="grid-lines">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div>
-              <div className="chart-columns">{trend.map((value, index) => <div key={index}><i style={{ height: `${value}%` }}><span /></i><em style={{ bottom: `${Math.max(10, value * .55)}%` }} /></div>)}</div>
-            </div>
-            <div className="axis"><span>5.11</span><span>5.25</span><span>6.08</span><span>6.22</span><span>7.06</span><span>7.26</span></div>
+            <div className="panel-head"><div><h3>分发与互动趋势</h3><span>{periodChartData.length ? `${periodChartData.length} 个周期 · ${basis}` : "暂无周期数据"}</span></div><div className="legend"><i className="teal-dot" /> 分发量 <i className="orange-dot" /> 互动率</div></div>
+            {periodChartData.length > 0 ? (
+              <div className="line-chart">
+                <div className="grid-lines">{[0, 1, 2, 3].map((item) => <i key={item} />)}</div>
+                <div className="chart-columns">{periodChartData.map((d, index) => <div key={index}><i style={{ height: `${Math.max(4, (d.distribution / maxChartDist) * 100)}%` }} title={`${d.period}: ${formatNumber(d.distribution)}`}><span /></i><em style={{ bottom: `${Math.max(10, Math.min(90, (d.engagement || 2)))}%` }} title={`${d.period}: 互动率 ${d.engagement}%`} /></div>)}</div>
+              </div>
+            ) : (
+              <p className="empty-state" style={{ padding: 40, textAlign: "center" }}>暂无周期数据，导入并审批通过后将在此展示趋势</p>
+            )}
+            <div className="axis">{periodChartData.length > 0 ? periodChartData.map((d, i) => <span key={i} title={d.period}>{d.period.slice(0, 5)}</span>) : null}</div>
           </article>
           <article className="panel retention-card">
             <div className="panel-head"><div><h3>内容留存</h3><span>视频内容加权值</span></div></div>
             {retentionRows.map(({ label, value }) => <div className="retention-row" key={label}><div><b>{label}</b><span>{value == null ? "暂无数据" : `${value}%`}</span></div><div className="retention-track"><i style={{ width: `${value || 0}%` }} /></div><small>{value == null ? "未提供" : "按分发量加权"}</small></div>)}
-            <div className="insight"><span>洞察</span><p>前 5 秒留存持续提升，但全篇完播略有回落，建议缩短中段铺垫。</p></div>
+            <div className="insight"><span>洞察</span><p>2秒退出率是衡量内容开头吸引力的关键指标；退出率越低说明前2秒越能留住观众。</p></div>
           </article>
         </section>
         <section className="analytics-grid lower">
@@ -1289,14 +1320,14 @@ function ImportModal({ onClose, onSave, platforms, uploader }: { onClose: () => 
     setSubmitting(true);
     setError("");
     try {
-      await onSave({ id: `i${Date.now()}`, filename: file.name, uploader, period: "2026-07-20 至 2026-07-26", basis, metricType, rows: 0, warnings: 0, status: "待审核", createdAt: "刚刚" }, file);
+      await onSave({ id: `i${Date.now()}`, filename: file.name, uploader, period: formatWeekRange(new Date()), basis, metricType, rows: 0, warnings: 0, status: "待审核", createdAt: "刚刚" }, file);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "导入失败");
       setSubmitting(false);
     }
   };
   return <Modal title="导入运营数据" subtitle={`步骤 ${step}/3 · ${step === 1 ? "上传文件" : step === 2 ? "确认字段映射" : "服务端校验并提交"}`} onClose={onClose} footer={<><button className="secondary" disabled={submitting} onClick={step === 1 ? onClose : () => setStep(step - 1)}>{step === 1 ? "取消" : "上一步"}</button><button className="primary" disabled={submitting || (step === 1 && !file)} onClick={step === 3 ? save : () => setStep(step + 1)}>{submitting ? "正在解析并上传…" : step === 3 ? "提交 Leader 审核" : "下一步"}</button></>}>
-    {step === 1 && <><label className={`dropzone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragging(true); }} onDragLeave={(event) => { event.preventDefault(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={dropFile}><input type="file" accept=".xlsx,.csv" onChange={(event) => chooseFile(event.target.files?.[0])} /><span className="upload-mark">{file ? "✓" : "↑"}</span><b>{file?.name || (dragging ? "松开鼠标即可添加文件" : "拖入文件，或点击选择 Excel / CSV")}</b><small>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · 文件已选择，可以点击下一步` : "支持 .xlsx、.csv，最大10MB · 原始文件将保存在公司服务器"}</small></label>{error && <p className="auth-message">{error}</p>}<div className="form-grid"><label>统计周期<input defaultValue="2026-07-20 至 2026-07-26" /></label><label>数据口径<select value={basis} onChange={(event) => setBasis(event.target.value as ImportBatch["basis"])}><option>内容累计表现</option><option>周期新增量</option></select></label></div></>}
+    {step === 1 && <><label className={`dropzone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragging(true); }} onDragLeave={(event) => { event.preventDefault(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={dropFile}><input type="file" accept=".xlsx,.csv" onChange={(event) => chooseFile(event.target.files?.[0])} /><span className="upload-mark">{file ? "✓" : "↑"}</span><b>{file?.name || (dragging ? "松开鼠标即可添加文件" : "拖入文件，或点击选择 Excel / CSV")}</b><small>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · 文件已选择，可以点击下一步` : "支持 .xlsx、.csv，最大10MB · 原始文件将保存在公司服务器"}</small></label>{error && <p className="auth-message">{error}</p>}<div className="form-grid"><label>统计周期<input defaultValue={formatWeekRange(new Date())} /></label><label>数据口径<select value={basis} onChange={(event) => setBasis(event.target.value as ImportBatch["basis"])}><option>内容累计表现</option><option>周期新增量</option></select></label></div></>}
     {step === 2 && <><div className="mapping-head"><b>识别到 13 个字段</b><span>{platforms.filter((item) => item.active).length} 个平台规则已启用</span></div><div className="mapping-list">{[["平台", "按名称 / 别名 / 链接自动匹配"], ["账号名", "账号名称"], ["发布内容", "标题 + 摘要 + 链接"], ["曝光数｜播放量", metricType], ["5秒完播", "5秒完播率"], ["涨粉数", "内容归因涨粉"]].map(([from, to], index) => <div key={from}><span>{from}</span><i>→</i>{index === 3 ? <select value={metricType} onChange={(event) => setMetricType(event.target.value as ImportBatch["metricType"])}><option>自动识别</option><option>曝光量</option><option>播放量</option></select> : <b>{to}</b>}</div>)}</div><div className="form-hint"><span>i</span>选择“自动识别”后，每一行会使用已匹配平台的默认分发指标；未知平台将标记为待确认，不会误归类。</div></>}
     {step === 3 && <><div className="validation-summary"><div className="valid"><strong>自动</strong><span>识别平台及字段</span></div><div className="warning"><strong>严格</strong><span>校验0、空值与未知平台</span></div><div><strong>审核</strong><span>批准后写入对应平台</span></div></div><div className="validation-list"><p><span>✓</span><b>原始文件将完整保留</b><small>Excel/CSV写入公司服务器持久目录</small></p><p><span>✓</span><b>平台名称、别名与链接联合识别</b><small>匹配后统一写入平台标准名称</small></p><p><span>✓</span><b>Leader 批准后进入正式看板</b><small>未知平台必须先新增或配置别名才能批准</small></p></div>{error && <p className="auth-message">{error}</p>}</>}
   </Modal>;
