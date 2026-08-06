@@ -494,7 +494,7 @@ export default function WorkspaceApp() {
 
       {taskModal && <TaskModal state={state} onClose={() => setTaskModal(false)} onSave={(task) => { mutate({ ...stateRef.current, tasks: [task, ...stateRef.current.tasks] }, "发布新任务"); setTaskModal(false); }} />}
       {importModal && <ImportModal platforms={state.platforms} uploader={auth.user.displayName} onClose={() => setImportModal(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); setState(result.state); const matched = result.batch.detectedPlatforms?.join("、") || "待确认平台"; const unmatched = result.batch.unmatchedPlatforms?.length ? `；${result.batch.unmatchedPlatforms.join("、")}待匹配` : ""; notify(`已识别 ${result.batch.rows} 条数据 · ${matched}${unmatched}`); setImportModal(false); }} />}
-      {manualEntryOpen && <ManualEntryModal platforms={state.platforms} uploader={auth.user.displayName} onClose={() => setManualEntryOpen(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); setState(result.state); notify(`手动录入 ${result.batch.rows} 条数据 · 已提交审核`); setManualEntryOpen(false); }} />}
+      {manualEntryOpen && <ManualEntryModal platforms={state.platforms} uploader={auth.user.displayName} periods={[...new Set([...state.contentRows.map(r => r.period).filter(Boolean) as string[], ...state.imports.map(i => i.period)])]} onClose={() => setManualEntryOpen(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); setState(result.state); notify(`手动录入 ${result.batch.rows} 条数据 · 已提交审核`); setManualEntryOpen(false); }} />}
       {reportModal && <ReportModal report={reportModal} onClose={() => setReportModal(null)} onSave={(updated) => { mutate({ ...stateRef.current, reports: stateRef.current.reports.map((report) => report.id === updated.id ? updated : report) }, updated.status === "已点评" ? "完成周报点评" : "保存周报"); setReportModal(null); }} />}
       {passwordModal && <PasswordChange session={auth} onClose={() => setPasswordModal(false)} />}
       {toast && <div className="toast"><span>✓</span>{toast}</div>}
@@ -576,7 +576,7 @@ function InternWorkspace({ state, session, member, loading, saving, onMutate }: 
       </main>
 
       {importModal && <ImportModal platforms={state.platforms} uploader={member.name} onClose={() => setImportModal(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); window.location.reload(); void result; }} />}
-      {manualEntryOpen && <ManualEntryModal platforms={state.platforms} uploader={member.name} onClose={() => setManualEntryOpen(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); window.location.reload(); void result; }} />}
+      {manualEntryOpen && <ManualEntryModal platforms={state.platforms} uploader={member.name} periods={[...new Set([...state.contentRows.map(r => r.period).filter(Boolean) as string[], ...state.imports.map(i => i.period)])]} onClose={() => setManualEntryOpen(false)} onSave={async (batch, file) => { const result = await uploadImportBatch(batch, file); window.location.reload(); void result; }} />}
       {passwordModal && <PasswordChange session={session} onClose={() => setPasswordModal(false)} />}
     </div>
   );
@@ -669,14 +669,18 @@ function InternReport({ state, report, onMutate }: { state: WorkspaceState; repo
 }
 
 function InternAnalytics({ state, imports, member, onImport, onManualEntry, onDeleteImport }: { state: WorkspaceState; imports: ImportBatch[]; member: Member; onImport: () => void; onManualEntry: () => void; onDeleteImport: (batchId: string) => Promise<void> }) {
+  const [selectedPeriod, setSelectedPeriod] = useState<string>("全部周期");
   // 从实习生导入记录中识别其负责的账号
   const myAccountNames = new Set(imports.flatMap(batch =>
     state.contentRows.filter(row => row.batchId === batch.id).map(row => row.account)
   ));
   // 如果识别不到账号，展示全部已批准数据
-  const myRows = myAccountNames.size > 0
+  const allMyRows = myAccountNames.size > 0
     ? state.contentRows.filter(row => myAccountNames.has(row.account))
     : state.contentRows;
+  const availablePeriods = [...new Set([...allMyRows.map(r => r.period).filter(Boolean) as string[], ...imports.map(i => i.period)])].sort((a, b) => b.localeCompare(a));
+  const myRows = selectedPeriod === "全部周期" ? allMyRows : allMyRows.filter(row => !row.period || row.period === selectedPeriod);
+  const filteredImports = selectedPeriod === "全部周期" ? imports : imports.filter(i => i.period === selectedPeriod);
   const uniqueAccounts = [...new Set(myRows.map(row => row.account))];
   const totalExposure = myRows.reduce((sum, row) => sum + row.exposure, 0);
   const totalInteractions = myRows.reduce((sum, row) => sum + row.likes + row.comments + row.saves + row.shares, 0);
@@ -689,13 +693,13 @@ function InternAnalytics({ state, imports, member, onImport, onManualEntry, onDe
   const maxWeekly = Math.max(1, ...weeklyExposure);
 
   return <>
-    <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
-    <div className="notice-line"><span>i</span><p>实习生导入的数据不会直接进入正式看板，必须通过 Leader 审核。</p></div>
+    <PageTitle eyebrow={`账号数据 · ${selectedPeriod === "全部周期" ? "全部周期" : selectedPeriod}`} title="运营数据" description="查看团队已批准数据，或提交你负责的运营数据等待 Leader 审核。" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
+    <div className="notice-line"><span>i</span><p>实习生导入的数据不会直接进入正式看板，必须通过 Leader 审核。{availablePeriods.length > 0 && <span style={{ marginLeft: 12 }}>周期：<select value={selectedPeriod} onChange={e => setSelectedPeriod(e.target.value)} style={{ fontSize: 12, padding: "1px 4px" }}><option value="全部周期">全部周期</option>{availablePeriods.map(p => <option key={p} value={p}>{p}</option>)}</select></span>}</p></div>
     <section className="analytics-kpis">
       {[
         ["负责账号", String(uniqueAccounts.length), uniqueAccounts.slice(0, 2).join(" / ") || member.name],
         ["内容条数", String(myRows.length), myRows.length ? "当前筛选" : "暂无数据"],
-        ["累计曝光", formatNumber(totalExposure), totalExposure > 0 ? "曝光 + 播放合计" : "暂无曝光数据"],
+        ["曝光数/播放量", formatNumber(totalExposure), totalExposure > 0 ? "曝光 + 播放合计" : "暂无曝光数据"],
         ["总互动量", formatNumber(totalInteractions), "赞评藏转合计"],
         ["加权互动率", `${weightedEngage}%`, "按曝光量加权"],
         ["归因涨粉", `+${formatNumber(totalFollowers)}`, "内容归因涨粉"],
@@ -712,8 +716,8 @@ function InternAnalytics({ state, imports, member, onImport, onManualEntry, onDe
         <div className="axis">{weeklyExposure.length > 0 ? weeklyExposure.map((_, i) => <span key={i}>W{i + 1}</span>) : null}</div>
       </article>
       <article className="panel">
-        <div className="panel-head"><div><h3>我的导入记录</h3><span>{imports.length} 批</span></div></div>
-        <div className="intern-import-list">{imports.length ? imports.map((batch) => <div key={batch.id}><span className="file-tile">表</span><div><b>{batch.filename}</b><small>{batch.period} · {batch.rows} 条</small></div><StatusPill tone={batch.status === "已批准" ? "teal" : batch.status === "待审核" ? "amber" : "red"}>{batch.status}</StatusPill><button className="secondary" style={{ fontSize: 11, padding: "2px 8px", color: "#c44", marginLeft: 8 }} onClick={async () => { if (!window.confirm(`确定删除「${batch.filename}」吗？${batch.status === "已批准" ? "已批准的数据将从看板移除，" : ""}此操作不可撤销。`)) return; await onDeleteImport(batch.id); }} title="删除此导入记录">🗑</button></div>) : <p className="empty-state">尚无导入记录</p>}</div>
+        <div className="panel-head"><div><h3>我的导入记录</h3><span>{filteredImports.length} 批</span></div></div>
+        <div className="intern-import-list">{filteredImports.length ? filteredImports.map((batch) => <div key={batch.id}><span className="file-tile">表</span><div><b>{batch.filename}</b><small>{batch.period} · {batch.rows} 条</small></div><StatusPill tone={batch.status === "已批准" ? "teal" : batch.status === "待审核" ? "amber" : "red"}>{batch.status}</StatusPill><button className="secondary" style={{ fontSize: 11, padding: "2px 8px", color: "#c44", marginLeft: 8 }} onClick={async () => { if (!window.confirm(`确定删除「${batch.filename}」吗？${batch.status === "已批准" ? "已批准的数据将从看板移除，" : ""}此操作不可撤销。`)) return; await onDeleteImport(batch.id); }} title="删除此导入记录">🗑</button></div>) : <p className="empty-state">尚无导入记录</p>}</div>
       </article>
     </section>
   </>;
@@ -831,10 +835,13 @@ function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, o
   const [basis, setBasis] = useState("内容累计表现");
   const [platform, setPlatform] = useState("全部平台");
   const [tab, setTab] = useState<"看板" | "内容明细" | "导入审核">("看板");
+  const [selectedPeriod, setSelectedPeriod] = useState<string>("全部周期");
   const [platformManager, setPlatformManager] = useState(false);
   const dataRows = state.contentRows.length ? state.contentRows : platformRows;
   const activePlatforms = state.platforms.filter((item) => item.active);
-  const basisRows = dataRows.filter((row) => !("basis" in row) || !row.basis || row.basis === basis);
+  const availablePeriods = [...new Set([...state.contentRows.map((r) => r.period).filter(Boolean) as string[], ...state.imports.map((i) => i.period)])].sort((a, b) => b.localeCompare(a));
+  const periodFilteredRows = selectedPeriod === "全部周期" ? dataRows : dataRows.filter((row) => !("period" in row) || !row.period || row.period === selectedPeriod);
+  const basisRows = periodFilteredRows.filter((row) => !("basis" in row) || !row.basis || row.basis === basis);
   const filteredRows = platform === "全部平台" ? basisRows : basisRows.filter((row) => row.platform === platform);
   const metricTypeOf = (row: ContentDataRow | typeof platformRows[number]) => (
     "metricType" in row ? row.metricType : row.platform === "小红书" ? "曝光量" : "播放量"
@@ -865,21 +872,21 @@ function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, o
   const maxPlatformTotal = Math.max(1, ...platformStats.map((item) => item.total));
   return (
     <>
-      <PageTitle eyebrow={`账号数据 · ${formatWeekRange(new Date())}`} title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
+      <PageTitle eyebrow={`账号数据 · ${selectedPeriod === "全部周期" ? "全部周期" : selectedPeriod}`} title="运营数据看板" description="周一至周日统计 · 两种数据口径独立展示" actions={<><button className="secondary" onClick={onManualEntry}>✎ 手动录入</button><button className="primary" onClick={onImport}>＋ 导入数据</button></>} />
       <div className="filter-bar">
         <div className="segmented">{["看板", "内容明细", "导入审核"].map((item) => <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item as typeof tab)}>{item}{item === "导入审核" && <em>{state.imports.filter((batch) => batch.status === "待审核").length}</em>}</button>)}</div>
-        <div className="filters"><select value={basis} onChange={(event) => setBasis(event.target.value)}><option>周期新增量</option><option>内容累计表现</option></select><select aria-label="平台筛选" value={platform} onChange={(event) => setPlatform(event.target.value)}><option>全部平台</option>{activePlatforms.map((item) => <option key={item.id}>{item.name}</option>)}</select><button className="platform-manage-trigger" onClick={() => setPlatformManager(true)}>＋ 管理平台</button><button>{formatWeekRange(new Date())}　⌄</button></div>
+        <div className="filters"><select value={basis} onChange={(event) => setBasis(event.target.value)}><option>周期新增量</option><option>内容累计表现</option></select><select aria-label="平台筛选" value={platform} onChange={(event) => setPlatform(event.target.value)}><option>全部平台</option>{activePlatforms.map((item) => <option key={item.id}>{item.name}</option>)}</select><button className="platform-manage-trigger" onClick={() => setPlatformManager(true)}>＋ 管理平台</button><select aria-label="周期筛选" value={selectedPeriod} onChange={(e) => setSelectedPeriod(e.target.value)} style={{ maxWidth: 160 }}><option value="全部周期">全部周期</option>{availablePeriods.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
       </div>
       {tab === "看板" && <>
         <div className="notice-line"><span>i</span><p>当前口径为 <b>{basis}</b>，平台为 <b>{platform}</b>。平台名称、别名和默认分发指标可由 Leader 管理，导入时自动匹配。</p></div>
         <section className="analytics-kpis">
           {[
             ["发布内容", String(filteredRows.length), "当前筛选"],
-            ["总曝光量", formatNumber(impressions), impressions ? "曝光口径" : "暂无曝光数据"],
-            ["总播放量", formatNumber(plays), plays ? "播放口径" : "暂无播放数据"],
+            ["曝光数/播放量", formatNumber(totalDistribution), "曝光 + 播放合计"],
             ["总互动量", formatNumber(interactions), "赞评藏转合计"],
-            ["每千次分发互动", interactionsPerThousand.toFixed(1), "统一计算指标"],
             ["内容归因涨粉", `+${formatNumber(followerGain)}`, "非账号净增粉"],
+            ["每千次分发互动", interactionsPerThousand.toFixed(1), "统一计算指标"],
+            ["2秒留存率", weightedExit != null ? `${Math.round((100 - weightedExit) * 10) / 10}%` : "—", "按分发量加权"],
           ].map(([label, value, note]) => <article key={label}><p>{label}<span>···</span></p><strong>{value}</strong><small>{note}</small></article>)}
         </section>
         <section className="analytics-grid">
@@ -907,7 +914,7 @@ function Analytics({ state, onImport, onManualEntry, onMutate, onReviewImport, o
         </section>
       </>}
       {tab === "内容明细" && <ContentTable platform={platform} rows={basisRows} />}
-      {tab === "导入审核" && <ImportReview state={state} onReview={onReviewImport} onDelete={onDeleteImport} />}
+      {tab === "导入审核" && <ImportReview state={{ ...state, imports: selectedPeriod === "全部周期" ? state.imports : state.imports.filter((i) => i.period === selectedPeriod) }} onReview={onReviewImport} onDelete={onDeleteImport} />}
       {platformManager && <PlatformManagerModal state={state} onClose={() => setPlatformManager(false)} onMutate={onMutate} />}
     </>
   );
@@ -1139,8 +1146,7 @@ type ManualRow = {
   platform: string;
   account: string;
   title: string;
-  exposure: string;
-  plays: string;
+  distribution: string;
   exitRate: string;
   fiveSecRate: string;
   likes: string;
@@ -1151,12 +1157,17 @@ type ManualRow = {
   followers: string;
 };
 
-function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader: string }) {
+function ManualEntryModal({ onClose, onSave, platforms, uploader, periods }: { onClose: () => void; onSave: (batch: ImportBatch, file: File) => Promise<void>; platforms: PlatformDefinition[]; uploader: string; periods: string[] }) {
   const activePlatforms = platforms.filter(p => p.active);
-  const emptyRow = (): ManualRow => ({ platform: activePlatforms[0]?.name || "", account: "", title: "", exposure: "", plays: "", exitRate: "", fiveSecRate: "", likes: "", comments: "", saves: "", shares: "", fullRate: "", followers: "" });
+  const emptyRow = (): ManualRow => ({ platform: activePlatforms[0]?.name || "", account: "", title: "", distribution: "", exitRate: "", fiveSecRate: "", likes: "", comments: "", saves: "", shares: "", fullRate: "", followers: "" });
   const [rows, setRows] = useState<ManualRow[]>([emptyRow()]);
+  const [period, setPeriod] = useState(formatWeekRange(new Date()));
+  const [customPeriod, setCustomPeriod] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const availablePeriods = [...new Set([formatWeekRange(new Date()), ...periods])].sort((a, b) => b.localeCompare(a));
+  const effectivePeriod = period === "__custom__" ? customPeriod : period;
 
   const updateRow = (index: number, field: keyof ManualRow, value: string) => {
     setRows(prev => prev.map((row, i) => i === index ? { ...row, [field]: value } : row));
@@ -1165,24 +1176,25 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
   const removeRow = (index: number) => setRows(prev => prev.filter((_, i) => i !== index));
 
   const submit = async () => {
-    const validRows = rows.filter(r => r.platform && r.account && r.title && (r.exposure || r.plays));
-    if (!validRows.length) { setError("请至少填写一条完整数据（平台、账号、内容标题和曝光量或播放量必填）"); return; }
+    const validRows = rows.filter(r => r.platform && r.account && r.title && r.distribution);
+    if (!validRows.length) { setError("请至少填写一条完整数据（平台、账号、内容标题和曝光数/播放量必填）"); return; }
+    if (period === "__custom__" && !customPeriod.trim()) { setError("请输入自定义统计周期"); return; }
     setSubmitting(true);
     setError("");
     try {
       const headers = ["平台", "账号名", "发布内容", "曝光数｜播放量", "2秒退出率", "5秒完播率", "互动率", "点赞数", "评论数", "收藏数", "分享数", "全篇完播率", "涨粉数"];
       const csvRows: string[][] = [];
       for (const r of validRows) {
-        if (r.exposure) csvRows.push([r.platform, r.account, r.title, r.exposure, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"]);
-        if (r.plays) csvRows.push([r.platform, r.account, `${r.title}（播放）`, r.plays, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"]);
+        csvRows.push([r.platform, r.account, r.title, r.distribution, r.exitRate || "", r.fiveSecRate || "", "", r.likes || "0", r.comments || "0", r.saves || "0", r.shares || "0", r.fullRate || "", r.followers || "0"]);
       }
       const csvLines = [headers.join(","), ...csvRows.map(r => r.join(","))];
       const file = new File([new Blob(["﻿" + csvLines.join("\n")], { type: "text/csv" })], `手动录入_${new Date().toISOString().slice(0, 10)}.csv`, { type: "text/csv" });
+      const targetPeriod = effectivePeriod || formatWeekRange(new Date());
       await onSave({
         id: `manual_${Date.now()}`,
         filename: `手动录入 · ${uploader} · ${new Date().toLocaleDateString("zh-CN")}`,
         uploader,
-        period: `${formatWeekRange(new Date())}`,
+        period: targetPeriod,
         basis: "内容累计表现",
         metricType: "自动识别",
         rows: validRows.length,
@@ -1196,7 +1208,16 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
     }
   };
 
-  return <Modal title="手动录入运营数据" subtitle={`${rows.length} 行 · 填写后提交 Leader 审核`} onClose={onClose} footer={<><button className="secondary" onClick={addRow}>＋ 添加一行</button><button className="secondary" onClick={onClose} disabled={submitting}>取消</button><button className="primary" onClick={submit} disabled={submitting}>{submitting ? "正在提交…" : "提交审核"}</button></>}>
+  return <Modal title="手动录入运营数据" subtitle={`${rows.length} 行 · 统计周期：${effectivePeriod || "未选择"}`} onClose={onClose} footer={<><button className="secondary" onClick={addRow}>＋ 添加一行</button><button className="secondary" onClick={onClose} disabled={submitting}>取消</button><button className="primary" onClick={submit} disabled={submitting}>{submitting ? "正在提交…" : "提交审核"}</button></>}>
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ fontSize: 13, fontWeight: 600 }}>统计周期
+        <select value={period} onChange={e => setPeriod(e.target.value)} style={{ marginLeft: 8, fontSize: 13, padding: "4px 8px" }}>
+          {availablePeriods.map(p => <option key={p} value={p}>{p}</option>)}
+          <option value="__custom__">自定义…</option>
+        </select>
+      </label>
+      {period === "__custom__" && <input value={customPeriod} onChange={e => setCustomPeriod(e.target.value)} placeholder="如：8月4日—8月10日" style={{ marginLeft: 8, fontSize: 13, padding: "4px 8px", width: 200 }} />}
+    </div>
     <div style={{ maxHeight: "50vh", overflow: "auto" }}>
       {rows.map((row, index) => (
         <div key={index} style={{ border: "1px solid #e0e0e0", borderRadius: 8, padding: 12, marginBottom: 10, background: index % 2 === 0 ? "#fafafa" : "#fff" }}>
@@ -1210,8 +1231,7 @@ function ManualEntryModal({ onClose, onSave, platforms, uploader }: { onClose: (
             </select></label>
             <label style={{ fontSize: 12 }}>账号名 <input value={row.account} onChange={e => updateRow(index, "account", e.target.value)} placeholder="如：灵珠" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12, gridColumn: "1 / -1" }}>发布内容 <input value={row.title} onChange={e => updateRow(index, "title", e.target.value)} placeholder="内容标题或描述" style={{ width: "100%", fontSize: 13 }} /></label>
-            <label style={{ fontSize: 12 }}>曝光量 <input type="number" value={row.exposure} onChange={e => updateRow(index, "exposure", e.target.value)} placeholder="曝光口径" style={{ width: "100%", fontSize: 13 }} /></label>
-            <label style={{ fontSize: 12 }}>播放量 <input type="number" value={row.plays} onChange={e => updateRow(index, "plays", e.target.value)} placeholder="播放口径" style={{ width: "100%", fontSize: 13 }} /></label>
+            <label style={{ fontSize: 12 }}>曝光数/播放量 <input type="number" value={row.distribution} onChange={e => updateRow(index, "distribution", e.target.value)} placeholder="输入分发量" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>2秒退出率 (%) <input type="number" step="0.1" value={row.exitRate} onChange={e => updateRow(index, "exitRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>5秒完播率 (%) <input type="number" step="0.1" value={row.fiveSecRate} onChange={e => updateRow(index, "fiveSecRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
             <label style={{ fontSize: 12 }}>全篇完播率 (%) <input type="number" step="0.1" value={row.fullRate} onChange={e => updateRow(index, "fullRate", e.target.value)} placeholder="选填" style={{ width: "100%", fontSize: 13 }} /></label>
